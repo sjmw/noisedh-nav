@@ -83,12 +83,22 @@ describe('/api/admin/sites CRUD', () => {
     const q = await getJson(await dev.fetch('/api/admin/sites?q=rt2', { headers: auth }));
     expect(q.total).toBe(1);
   });
-  it('PATCH 白名单：改 title/status/sort 生效，白名单外键（url/id）忽略', async () => {
+  it('PATCH 白名单：改 title/status/sort 生效；url 更新（服务端规范化 + url_raw 兜底同步，Task 9/10 裁定a）；id 等白名单外键仍忽略', async () => {
     const id = (await getJson(await post('/api/admin/sites', { url: 'https://patchme.invalid' }))).site.id;
-    const res = await dev.fetch(`/api/admin/sites/${id}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ title: '补丁题', status: 'published', sort: 5, url: 'https://evil.invalid', id: 999 }) });
+    const res = await dev.fetch(`/api/admin/sites/${id}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ title: '补丁题', status: 'published', sort: 5, url: ' HTTPS://PatchMe.Invalid/x ', id: 999 }) });
     expect(res.status).toBe(200);
     const { site } = await getJson(res);
-    expect(site).toMatchObject({ id, title: '补丁题', status: 'published', sort: 5, url: 'https://patchme.invalid' });
+    expect(site).toMatchObject({ id, title: '补丁题', status: 'published', sort: 5, url: 'https://patchme.invalid/x', url_raw: 'HTTPS://PatchMe.Invalid/x' });
+  });
+  it('PATCH url 非法 → 400；url 撞已有行 → 409 dup_url 且原行不动', async () => {
+    const a = (await getJson(await post('/api/admin/sites', { url: 'https://patcha.invalid' }))).site.id;
+    await post('/api/admin/sites', { url: 'https://patchb.invalid' });
+    expect((await dev.fetch(`/api/admin/sites/${a}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ url: 'javascript:alert(1)' }) })).status).toBe(400);
+    const dup = await dev.fetch(`/api/admin/sites/${a}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ url: 'https://patchb.invalid' }) });
+    expect(dup.status).toBe(409);
+    expect(await getJson(dup)).toMatchObject({ error: 'dup_url' });
+    const list = await getJson(await dev.fetch('/api/admin/sites?q=patcha', { headers: auth }));
+    expect(list.sites[0]).toMatchObject({ id: a, url: 'https://patcha.invalid' });
   });
   it('PATCH 非法 status / 空补丁 / 不存在 id → 400/404', async () => {
     const id = (await getJson(await post('/api/admin/sites', { url: 'https://patchbad.invalid' }))).site.id;

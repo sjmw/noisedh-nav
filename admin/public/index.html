@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>导航站后台</title>
+<style>
+  /* 工具页：暗色最小样式，内联即可（spec §7：不追求样式，功能可键盘完成） */
+  :root { color-scheme: dark; --bg:#111417; --panel:#1a1f24; --line:#2c343c; --fg:#d8dee4; --dim:#8b949e; --acc:#4aa0e0; --ok:#3f9d5a; --warn:#c9822a; --err:#d06060; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:1rem 1.25rem 4rem; background:var(--bg); color:var(--fg); font:14px/1.6 system-ui,"PingFang SC","Microsoft YaHei",sans-serif; }
+  h1 { font-size:18px; margin:0 0 .75rem; }
+  h2 { font-size:15px; margin:1rem 0 .5rem; color:var(--dim); font-weight:600; }
+  header { border-bottom:1px solid var(--line); padding-bottom:.75rem; margin-bottom:1rem; }
+  #token-bar { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
+  #tabs { display:flex; gap:.5rem; }
+  #tabs button.on { border-color:var(--acc); color:var(--acc); }
+  button, input, select, textarea { font:inherit; color:inherit; background:var(--panel); border:1px solid var(--line); border-radius:5px; padding:.3rem .6rem; }
+  button { cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--acc); }
+  button:disabled { opacity:.5; cursor:default; }
+  input:focus, select:focus, textarea:focus, button:focus { outline:1px solid var(--acc); outline-offset:1px; }
+  textarea { width:100%; min-height:120px; resize:vertical; }
+  table { border-collapse:collapse; width:100%; margin-top:.5rem; }
+  th, td { border:1px solid var(--line); padding:.3rem .5rem; text-align:left; vertical-align:top; }
+  th { color:var(--dim); font-weight:600; white-space:nowrap; }
+  td input, td select { width:100%; min-width:70px; }
+  .row-ops { white-space:nowrap; }
+  .row-ops button { margin:1px 2px; padding:.2rem .4rem; }
+  #filters { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
+  #pager { display:flex; gap:.5rem; align-items:center; margin-top:.5rem; }
+  #toasts { position:fixed; right:1rem; bottom:1rem; display:flex; flex-direction:column; gap:.5rem; max-width:30rem; z-index:10; }
+  .toast { background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--acc); border-radius:6px; padding:.5rem .8rem; box-shadow:0 2px 8px #0008; word-break:break-all; }
+  .toast.ok { border-left-color:var(--ok); }
+  .toast.err { border-left-color:var(--err); }
+  .toast a { color:var(--acc); }
+  .dim { color:var(--dim); }
+  .hidden { display:none !important; }
+  .stat-added { color:var(--ok); } .stat-skipped_dup { color:var(--warn); } .stat-failed { color:var(--err); }
+  code { background:var(--panel); padding:0 .3rem; border-radius:3px; }
+  section { max-width:1100px; }
+  #add-form { display:flex; gap:.5rem; }
+  #add-form input { flex:1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>导航站后台 <span class="dim">noisedh-admin</span></h1>
+  <div id="token-bar">
+    <label for="token-input">管理口令</label>
+    <input id="token-input" type="password" autocomplete="off" placeholder="ADMIN_TOKEN">
+    <button id="token-save" type="button">进入</button>
+    <button id="token-clear" type="button" title="清除本机保存的口令">清除</button>
+    <span id="token-hint" class="dim hidden">口令失效（401），请重新输入</span>
+  </div>
+  <nav id="tabs" class="hidden" aria-label="视图切换">
+    <button type="button" data-view="list">列表</button>
+    <button type="button" data-view="import">导入</button>
+    <button type="button" data-view="add">新增</button>
+  </nav>
+</header>
+<main>
+  <section id="view-list" class="hidden">
+    <div id="filters">
+      <input id="f-q" type="search" placeholder="搜索 标题/URL/描述" aria-label="关键词">
+      <select id="f-status" aria-label="状态筛选">
+        <option value="">全部状态</option>
+        <option value="pending">待发布</option>
+        <option value="published">已发布</option>
+      </select>
+      <select id="f-taxonomy" aria-label="分类筛选"><option value="">全部分类</option></select>
+      <button id="f-apply" type="button">筛选</button>
+      <button id="publish-btn" type="button">批量发布</button>
+      <button id="list-reload" type="button" title="重新加载当前页">刷新</button>
+    </div>
+    <div id="list-meta" class="dim"></div>
+    <div id="table-wrap"></div>
+    <div id="pager">
+      <button id="page-prev" type="button">上一页</button>
+      <span id="page-info" class="dim"></span>
+      <button id="page-next" type="button">下一页</button>
+    </div>
+  </section>
+
+  <section id="view-import" class="hidden">
+    <h2>导入 Chrome 书签 HTML</h2>
+    <p class="dim">选择 Chrome 导出的书签文件（或把内容粘贴到下方文本框），服务端解析并按条抓取分析，重复 URL 自动跳过。</p>
+    <input id="import-file" type="file" accept=".html,text/html">
+    <h2>或粘贴 HTML 内容</h2>
+    <textarea id="import-text" placeholder="&lt;!DOCTYPE NETSCAPE-Bookmark-file-1&gt; ..."></textarea>
+    <p><button id="import-go" type="button">开始导入</button> <span id="import-busy" class="dim hidden">导入中（逐条抓取分析，可能较慢）…</span></p>
+    <div id="import-result"></div>
+  </section>
+
+  <section id="view-add" class="hidden">
+    <h2>新增站点（给一个 URL 即添加）</h2>
+    <p class="dim">服务端会抓取页面（配置了 AI 则自动分析标题/描述/分类），失败时降级为占位行，可在列表中继续编辑。</p>
+    <div id="add-form">
+      <input id="add-url" type="text" placeholder="https://example.com" autocomplete="off">
+      <button id="add-go" type="button">添加</button>
+    </div>
+    <div id="add-result"></div>
+  </section>
+</main>
+<div id="toasts" aria-live="polite"></div>
+<script src="/admin.js"></script>
+<!-- 脚本与 API 均按「源根锚定」引用：页面可能被挂在 /（本地 wrangler dev）或 /admin/（线上区域路由）下，
+     纯路径相对（admin.js / api/...）在 /admin/ 下会解析成 /admin/admin.js 而 404；/… 绝对路径两处同源同形。 -->
+</body>
+</html>

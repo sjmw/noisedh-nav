@@ -1,0 +1,356 @@
+'use strict';
+/* 导航站后台单页（spec §7）：口令条(sessionStorage) + 列表/导入/新增 三视图，原生 JS 零依赖。
+ * 约定：
+ *  - 口令存 sessionStorage（brief 拍板；spec §7 原文写 localStorage，以 brief 为准——关标签页即失效）。
+ *  - 任何地方不打印/不落盘 token；401 → 清除口令并重新显示口令条。
+ *  - 所有请求走 /api/admin/*，响应壳：单行 {site}、列表 {sites,total,page,perPage}、
+ *    导入 {added,skipped_dup,failed,items}、发布 {commitUrl,count}、错误 {error,message}。
+ *  - URL 锚定源根（location.origin + '/api/admin/'）：页面可能挂在 /（本地 dev）或 /admin/
+ *    （线上区域路由），路径相对解析在 /admin/ 下会指向 /admin/api/... 而失效；同源绝对路径两处均正确。
+ */
+const API = location.origin + '/api/admin/';
+const TOKEN_KEY = 'noisedh-admin-token';
+
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = String(text);
+  return n;
+};
+const tokenBar = $('token-bar'), tabs = $('tabs'), tokenHint = $('token-hint');
+
+/* ---------- toast ---------- */
+function toast(msg, { type = '', linkUrl = '', linkText = '查看提交', ttl = 6000 } = {}) {
+  const box = el('div', 'toast' + (type ? ' ' + type : ''));
+  box.append(msg);
+  if (linkUrl && /^https?:/i.test(linkUrl)) { // 只接受 http(s) 链接，防 javascript: 注入
+    const a = el('a', '', ' ' + linkText + ' ↗');
+    a.href = linkUrl; a.target = '_blank'; a.rel = 'noopener';
+    box.append(a);
+  }
+  $('toasts').append(box);
+  setTimeout(() => box.remove(), ttl);
+}
+
+/* ---------- 认证 + 请求封装 ---------- */
+const getToken = () => sessionStorage.getItem(TOKEN_KEY) || '';
+function setToken(v) { v ? sessionStorage.setItem(TOKEN_KEY, v) : sessionStorage.removeItem(TOKEN_KEY); }
+
+function applyAuthedUi(authed) {
+  tabs.classList.toggle('hidden', !authed);
+  tokenBar.classList.toggle('hidden', authed);
+  if (!authed) {
+    tabs.querySelectorAll('button.on').forEach((b) => b.classList.remove('on'));
+    document.querySelectorAll('main section').forEach((s) => s.classList.add('hidden'));
+  }
+}
+
+// 统一入口：带 Bearer、解析 JSON、非 2xx 抛 {message,status,code}；401 时清口令回到口令条。
+async function api(path, opts = {}) {
+  const headers = { Authorization: 'Bearer ' + getToken(), ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}) };
+  const res = await fetch(API + path, { ...opts, headers });
+  if (res.status === 401) {
+    setToken('');
+    tokenHint.classList.remove('hidden');
+    applyAuthedUi(false);
+    const err = new Error('口令无效或已过期，请重新输入'); err.status = 401; throw err;
+  }
+  if (res.status === 204) return null;
+  let data = null;
+  try { data = await res.json(); } catch { /* 非 JSON 兜底 */ }
+  if (!res.ok) {
+    const err = new Error((data && data.message) || `请求失败（HTTP ${res.status}）`);
+    err.status = res.status; err.code = data && data.error; throw err;
+  }
+  return data;
+}
+
+/* ---------- 视图切换 ---------- */
+function showView(name) {
+  for (const b of tabs.querySelectorAll('button')) b.classList.toggle('on', b.dataset.view === name);
+  for (const s of document.querySelectorAll('main section')) s.classList.toggle('hidden', s.id !== 'view-' + name);
+  if (name === 'list') { loadList(); loadTaxonomies(); }
+}
+tabs.addEventListener('click', (e) => {
+  const v = e.target && e.target.dataset && e.target.dataset.view;
+  if (v) showView(v);
+});
+
+/* ---------- 口令条 ---------- */
+async function enter() {
+  const t = $('token-input').value.trim();
+  if (!t) { toast('请输入口令', { type: 'err' }); return; }
+  setToken(t);
+  try {
+    await api('sites?perPage=1'); // 用一次最小读请求校验口令
+    tokenHint.classList.add('hidden');
+    $('token-input').value = '';
+    applyAuthedUi(true);
+    showView('list');
+    toast('口令已保存（仅本标签页有效）', { type: 'ok', ttl: 3000 });
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, { type: 'err' }); // 401 已在 api() 里回退口令条
+  }
+}
+$('token-save').addEventListener('click', enter);
+$('token-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') enter(); });
+$('token-clear').addEventListener('click', () => { setToken(''); applyAuthedUi(false); toast('口令已清除', { ttl: 3000 }); });
+
+/* ---------- 列表视图 ---------- */
+const listState = { q: '', status: '', taxonomy: '', page: 1, perPage: 50, total: 0, sites: [] };
+
+async function loadTaxonomies() {
+  try {
+    const { categories } = await api('categories');
+    const sel = $('f-taxonomy');
+    const cur = sel.value;
+    sel.replaceChildren(new Option('全部分类', ''));
+    for (const t of [...new Set(categories.map((c) => c.taxonomy))].sort()) sel.append(new Option(t, t));
+    if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
+  } catch { /* 401 已由 api() 处理，其余静默（筛选器缺分类不致命） */ }
+}
+
+async function loadList() {
+  try {
+    const p = new URLSearchParams();
+    if (listState.q) p.set('q', listState.q);
+    if (listState.status) p.set('status', listState.status);
+    if (listState.taxonomy) p.set('taxonomy', listState.taxonomy);
+    p.set('page', String(listState.page));
+    p.set('perPage', String(listState.perPage));
+    const data = await api('sites?' + p.toString());
+    Object.assign(listState, { total: data.total, sites: data.sites });
+    renderList();
+  } catch (e) { if (e.status !== 401) toast('加载列表失败：' + e.message, { type: 'err' }); }
+}
+
+function renderList() {
+  const pages = Math.max(1, Math.ceil(listState.total / listState.perPage));
+  $('list-meta').textContent = `共 ${listState.total} 条 · 第 ${listState.page}/${pages} 页 · 每页 ${listState.perPage} 条`;
+  $('page-info').textContent = `${listState.page} / ${pages}`;
+  $('page-prev').disabled = listState.page <= 1;
+  $('page-next').disabled = listState.page >= pages;
+  const table = el('table');
+  const head = el('tr');
+  for (const t of ['ID', 'URL(原样)', '标题', '描述', 'Logo', '分类', '子分类', '状态', '排序', '来源', '操作']) head.append(el('th', '', t));
+  table.append(head);
+  for (const site of listState.sites) table.append(buildRow(site));
+  $('table-wrap').replaceChildren(table);
+}
+
+function actionBtn(label, fn, danger) {
+  const b = el('button', '', label);
+  b.type = 'button';
+  if (danger) b.style.color = 'var(--err)';
+  b.addEventListener('click', () => fn(b));
+  return b;
+}
+
+function fieldInput(type, value, ph) {
+  const i = el('input');
+  i.type = type; i.value = value ?? '';
+  if (ph) i.placeholder = ph;
+  return i;
+}
+
+// 行内编辑：各字段 input 初值 = 该行现值；「保存」只提交改动过的字段（PATCH 白名单）。
+function buildRow(site) {
+  const tr = document.createElement('tr');
+  tr.dataset.id = String(site.id);
+  const td = (node) => { const c = el('td'); c.append(node); tr.append(c); return c; };
+  td(el('span', 'dim', site.id));
+  // 展示口径（Task 9/10 裁定）：url_raw || url —— 原样 URL 保真，编辑后仍显示用户输入形态
+  const inUrl = fieldInput('text', site.url_raw || site.url, 'https://…');
+  const inTitle = fieldInput('text', site.title);
+  const inDesc = fieldInput('text', site.description);
+  const inLogo = fieldInput('text', site.logo, '文件名或 URL');
+  const inTax = fieldInput('text', site.taxonomy);
+  const inTerm = fieldInput('text', site.term);
+  const inStatus = el('select');
+  inStatus.append(new Option('待发布 pending', 'pending'), new Option('已发布 published', 'published'));
+  inStatus.value = site.status;
+  const inSort = fieldInput('number', site.sort); inSort.style.width = '5rem';
+  td(inUrl); td(inTitle); td(inDesc); td(inLogo); td(inTax); td(inTerm); td(inStatus); td(inSort);
+  td(el('span', 'dim', site.source));
+
+  const ops = el('div', 'row-ops');
+  ops.append(
+    actionBtn('保存', async (btn) => {
+      const patch = {};
+      for (const [k, input, orig] of [
+        ['title', inTitle, site.title], ['description', inDesc, site.description],
+        ['logo', inLogo, site.logo], ['taxonomy', inTax, site.taxonomy], ['term', inTerm, site.term],
+      ]) {
+        if (input.value !== (orig ?? '')) patch[k] = input.value;
+      }
+      if (inStatus.value !== site.status) patch.status = inStatus.value;
+      const sortNum = Number(inSort.value);
+      if (Number.isFinite(sortNum) && sortNum !== site.sort) patch.sort = sortNum;
+      // 裁定(a)：改 URL 时必须在同一个 PATCH 里同时送 url + url_raw（=编辑值）。
+      // 导出取 url_raw||url：若只送 url（或漏送 url_raw），webstack.yml 会停在旧 URL（导出陈旧）；
+      // 服务端会把 url 再规范化为去重键，url_raw 保留用户输入原样（漏送时服务端亦兜底同步）。
+      const urlEdited = inUrl.value.trim();
+      if (urlEdited !== (site.url_raw || site.url)) { patch.url = urlEdited; patch.url_raw = urlEdited; }
+      if (Object.keys(patch).length === 0) { toast('没有改动可保存', { ttl: 3000 }); return; }
+      btn.disabled = true;
+      try {
+        const { site: fresh } = await api(`sites/${site.id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+        const i = listState.sites.findIndex((s) => s.id === site.id);
+        if (i >= 0) listState.sites[i] = fresh;
+        tr.replaceWith(buildRow(fresh));
+        toast(`站点 #${fresh.id} 已保存`, { type: 'ok', ttl: 3000 });
+      } catch (e) {
+        if (e.status !== 401) toast('保存失败：' + e.message, { type: 'err' });
+        btn.disabled = false;
+      }
+    }),
+    actionBtn('重分析', async (btn) => {
+      btn.disabled = true;
+      toast(`站点 #${site.id} 重新分析中…`, { ttl: 4000 });
+      try {
+        const { site: fresh } = await api(`sites/${site.id}/analyze`, { method: 'POST', body: '{}' });
+        const i = listState.sites.findIndex((s) => s.id === site.id);
+        if (i >= 0) listState.sites[i] = fresh; else listState.total++;
+        tr.replaceWith(buildRow(fresh));
+        toast(`分析完成，新行 #${fresh.id}`, { type: 'ok', ttl: 4000 });
+      } catch (e) {
+        if (e.status !== 401) toast('重分析失败：' + e.message, { type: 'err' });
+        btn.disabled = false;
+      }
+    }),
+    actionBtn('删除', async (btn) => {
+      if (!confirm(`确认删除站点 #${site.id}（${site.url_raw || site.url}）？`)) return;
+      btn.disabled = true;
+      try {
+        await api(`sites/${site.id}`, { method: 'DELETE' });
+        const i = listState.sites.findIndex((s) => s.id === site.id);
+        if (i >= 0) listState.sites.splice(i, 1);
+        if (listState.total > 0) listState.total--;
+        tr.remove();
+        toast(`站点 #${site.id} 已删除`, { type: 'ok', ttl: 3000 });
+      } catch (e) {
+        if (e.status !== 401) toast('删除失败：' + e.message, { type: 'err' });
+        btn.disabled = false;
+      }
+    }, true),
+  );
+  td(ops);
+  return tr;
+}
+
+$('f-apply').addEventListener('click', () => {
+  listState.q = $('f-q').value.trim();
+  listState.status = $('f-status').value;
+  listState.taxonomy = $('f-taxonomy').value;
+  listState.page = 1;
+  loadList();
+});
+$('f-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('f-apply').click(); });
+$('list-reload').addEventListener('click', () => { loadList(); loadTaxonomies(); });
+$('page-prev').addEventListener('click', () => { if (listState.page > 1) { listState.page--; loadList(); } });
+$('page-next').addEventListener('click', () => {
+  if (listState.page * listState.perPage < listState.total) { listState.page++; loadList(); }
+});
+
+/* ---------- 批量发布 ---------- */
+$('publish-btn').addEventListener('click', async (btn) => {
+  if (!confirm('把所有待发布站点写入 webstack.yml 并推送 GitHub（触发前台 Pages 重建）？')) return;
+  btn.disabled = true; btn.textContent = '发布中…';
+  try {
+    const r = await api('publish', { method: 'POST', body: '{}' });
+    toast(`发布成功：${r.count} 条站点已写入 webstack.yml。`, { type: 'ok', linkUrl: r.commitUrl, ttl: 12000 });
+    loadList();
+  } catch (e) {
+    // 失败路径：后端统一错误信封 {error,message}（如 GITHUB_TOKEN 未配置/冲突），toast 呈现，不崩
+    if (e.status !== 401) toast('发布失败：' + e.message, { type: 'err', ttl: 10000 });
+  } finally {
+    btn.disabled = false; btn.textContent = '批量发布';
+  }
+});
+
+/* ---------- 导入视图 ---------- */
+$('import-file').addEventListener('change', () => {
+  const f = $('import-file').files && $('import-file').files[0];
+  if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    const html = String(rd.result || '');
+    $('import-text').value = html; // 回填文本框：可见、可再编辑，「开始导入」统一读文本框
+    toast(`已读取文件 ${f.name}（约 ${(html.length / 1024).toFixed(0)} KB），点「开始导入」提交`, { type: 'ok', ttl: 5000 });
+  };
+  rd.onerror = () => toast('文件读取失败', { type: 'err' });
+  rd.readAsText(f, 'utf-8');
+});
+$('import-go').addEventListener('click', async (btn) => {
+  const html = $('import-text').value;
+  if (!html.trim()) { toast('请先选择文件或粘贴书签 HTML', { type: 'err' }); return; }
+  btn.disabled = true; $('import-busy').classList.remove('hidden');
+  $('import-result').replaceChildren();
+  try {
+    const r = await api('import', { method: 'POST', body: JSON.stringify({ html }) });
+    renderImportResult(r);
+    toast(`导入完成：新增 ${r.added}，重复跳过 ${r.skipped_dup}，失败 ${r.failed}`, { type: r.failed ? 'err' : 'ok', ttl: 8000 });
+  } catch (e) {
+    if (e.status !== 401) toast('导入失败：' + e.message, { type: 'err', ttl: 8000 });
+  } finally {
+    btn.disabled = false; $('import-busy').classList.add('hidden');
+  }
+});
+function renderImportResult(r) {
+  const box = $('import-result');
+  box.replaceChildren();
+  box.append(el('h2', '', `结果：新增 ${r.added} · 重复跳过 ${r.skipped_dup} · 失败 ${r.failed}`));
+  const label = { added: '新增', skipped_dup: '重复跳过', failed: '失败' };
+  const table = el('table');
+  const head = el('tr');
+  for (const t of ['URL', '结果', '原因']) head.append(el('th', '', t));
+  table.append(head);
+  for (const it of r.items) {
+    const tr = el('tr');
+    const c1 = el('td'); c1.append(el('span', '', it.url));
+    const c2 = el('td'); c2.append(el('span', 'stat-' + it.status, label[it.status] || it.status));
+    const c3 = el('td'); c3.append(el('span', 'dim', it.reason || ''));
+    tr.append(c1, c2, c3);
+    table.append(tr);
+  }
+  box.append(table);
+}
+
+/* ---------- 新增视图 ---------- */
+async function addSite() {
+  const url = $('add-url').value.trim();
+  if (!url) { toast('请输入 URL', { type: 'err' }); return; }
+  const btn = $('add-go'); btn.disabled = true;
+  $('add-result').replaceChildren();
+  try {
+    // 服务端 analyzeAndUpsert 已完成抓取+分析（未配 AI/抓取失败 → 降级 pending 行），UI 只展示结果行
+    const { site } = await api('sites', { method: 'POST', body: JSON.stringify({ url }) });
+    $('add-url').value = '';
+    const pairs = {
+      ID: site.id, 'URL（规范化）': site.url, 'URL（原样）': site.url_raw, 标题: site.title,
+      描述: site.description || '（空）', 分类: site.taxonomy, 子分类: site.term || '（无）',
+      状态: site.status === 'published' ? '已发布' : '待发布（如为降级占位行，可在列表编辑或点「重分析」）',
+      来源: site.source,
+    };
+    const dl = el('dl');
+    for (const [k, v] of Object.entries(pairs)) { dl.append(el('dt', '', k), el('dd', '', v)); }
+    $('add-result').append(el('h2', '', '已添加，服务端分析结果：'), dl);
+    toast(`站点 #${site.id} 已入库`, { type: 'ok', ttl: 4000 });
+  } catch (e) {
+    if (e.status !== 401) toast('添加失败：' + e.message, { type: 'err', ttl: 8000 }); // dup_url 409 等走此分支
+  } finally {
+    btn.disabled = false;
+  }
+}
+$('add-go').addEventListener('click', addSite);
+$('add-url').addEventListener('keydown', (e) => { if (e.key === 'Enter') addSite(); });
+
+/* ---------- 启动 ---------- */
+if (getToken()) {
+  api('sites?perPage=1')
+    .then(() => { applyAuthedUi(true); showView('list'); })
+    .catch(() => { /* 401 已在 api() 内回退口令条；网络类错误也停留口令条，可重试 */ });
+} else {
+  applyAuthedUi(false);
+}

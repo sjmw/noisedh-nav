@@ -4,6 +4,7 @@
 // 响应壳：单行 {site}、列表 {sites,total,page,perPage}、分类 {categories}；错误一律 {error,message}。
 
 import { parseChromeBookmarks } from './bookmarks';
+import { normalizeUrl } from './url';
 import { analyzeAndUpsert } from './pipeline';
 import { doPublish } from './publish';
 import { jsonError } from './errors';
@@ -19,7 +20,9 @@ import type { ErrCode } from './errors';
 // 而非 JSON 请求体：JSON 转义（\" 等）会膨胀体积，按 body 计会让实际可用的 html 低于名义上限。
 const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
 const IMPORT_CONCURRENCY = 3;
-const PATCH_FIELDS = ['title', 'description', 'logo', 'taxonomy', 'term', 'status', 'sort'] as const;
+// url/url_raw 入白名单是 Task 9/10 裁定(a) 的 UI 侧要求：行内编辑允许改 URL；
+// 展示与导出走 url_raw（缺省回退 url），db 层 MUTABLE 本就放行二者，此处路由层同步放行。
+const PATCH_FIELDS = ['url', 'url_raw', 'title', 'description', 'logo', 'taxonomy', 'term', 'status', 'sort'] as const;
 
 const json = (data: unknown, status = 200): Response => Response.json(data, { status });
 
@@ -116,11 +119,27 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
       const patch: Record<string, unknown> = {};
       for (const k of PATCH_FIELDS) if (body[k] !== undefined) patch[k] = body[k]; // 白名单外键忽略（spec §6 未定义其语义，取宽松）
       if (Object.keys(patch).length === 0) return fail('bad_request', '无可更新字段（白名单：' + PATCH_FIELDS.join(',') + '）');
-      for (const k of ['title', 'description', 'logo', 'taxonomy', 'term'] as const)
+      for (const k of ['url', 'url_raw', 'title', 'description', 'logo', 'taxonomy', 'term'] as const)
         if (patch[k] !== undefined && typeof patch[k] !== 'string') return fail('bad_request', `${k} 需为字符串`);
       if (patch.status !== undefined && patch.status !== 'pending' && patch.status !== 'published') return fail('bad_request', 'status 仅 pending|published');
       if (patch.sort !== undefined && (typeof patch.sort !== 'number' || !Number.isFinite(patch.sort))) return fail('bad_request', 'sort 需为数字');
-      const row = await updateSite(db, id, patch as SitePatch);
+      if (patch.url !== undefined) {
+        const raw = (patch.url as string).trim();
+        if (raw === '') return fail('bad_request', 'url 不能为空');
+        const norm = normalizeUrl(raw);
+        if (!norm) return fail('bad_request', 'url 非法（需 http/https，主机须含点）');
+        // 裁定(a)：导出取 url_raw||url —— 只改 url 不带 url_raw 会让导出停在旧值，
+        // 服务端兜底把 url_raw 同步为本次编辑的原始输入（UI 正常会显式同送两者）。
+        if (patch.url_raw === undefined) patch.url_raw = raw;
+        patch.url = norm; // url 列语义 = 规范化去重键，服务端统一规范化
+      }
+      let row: SiteRow | null;
+      try {
+        row = await updateSite(db, id, patch as SitePatch);
+      } catch (e) {
+        if (/UNIQUE/i.test(String((e as Error)?.cause ?? e))) return fail('dup_url', '该 URL 已存在'); // 改 url 撞已有行
+        throw e;
+      }
       if (!row) return jsonError('bad_request', '站点不存在', 404);
       return json({ site: row });
     }
