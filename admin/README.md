@@ -94,13 +94,13 @@ npx wrangler d1 execute navdata --remote --file=./seed.sql --yes
 curl -sS -X POST https://nav.wzyo.top/api/admin/publish -H "Authorization: Bearer <ADMIN_TOKEN>"
 ```
 
-预期：`{"commitUrl":…,"count":389}`。**首次干跑可能产生一个 7 行引号风格 churn 的 commit（语义 diff 为零）**
+预期：`{"commitUrl":…,"count":381}`（381 = seed 站点行数，与 `test/seed.test.mjs` 闸口断言一致）。**首次干跑可能产生一个 7 行引号风格 churn 的 commit（语义 diff 为零）**
 ——seed 与线上 `webstack.yml` 的 YAML 引法可能有出入，属预期内一次性噪音；干跑后再点一次应走
 「远端内容 = 本次将写」幂等短路（不再产生 commit）。若报 `github_conflict` 说明远端有非本次发布的改动，停下人工看 diff。
 
 ## 步骤 8 · 手机扩展冒烟清单（用户参与）
 
-1. 电脑浏览器开 `https://nav.wzyo.top/admin` → 输入 ADMIN_TOKEN → 「进入」→ 列表出现 389 行
+1. 电脑浏览器开 `https://nav.wzyo.top/admin` → 输入 ADMIN_TOKEN → 「进入」→ 列表出现 381 行（seed 全量）
 2. 手机 Chrome 装 `extension/Nav-manage-extension` → 选项里 serverUrl 改 `https://nav.wzyo.top`、token 填 ADMIN_TOKEN
 3. 任意网页点扩展「收藏」→ 回 `/admin` 列表筛选「待发布」→ 出现 pending 行 → 编辑标题 → 「批量发布」
 4. GitHub 仓库出现发布 commit → Pages 自动构建 → 前台刷新可见新条目
