@@ -73,6 +73,27 @@ export async function allPublishedRows(db: D1Database): Promise<SiteRow[]> {
   return results;
 }
 
+// publish 快照用：与 allPublishedRows 同序（同一全序下拼接两类状态即可复现构建顺序）
+export async function allPendingRows(db: D1Database): Promise<SiteRow[]> {
+  const { results } = await db
+    .prepare(`SELECT * FROM sites WHERE status = 'pending' ORDER BY taxonomy, term, sort, id`)
+    .all<SiteRow>();
+  return results;
+}
+
+// 发布成功后的批量翻转（发布即快照）。按本次快照的 id 清单翻转而非 WHERE status='pending'：
+// GitHub 往返窗口内新落入的 pending 行不在本次 yml 里，不能被静默连带发布。
+// 每批 90 个绑定参数（D1 单语句参数上限 100 的保守值）。
+export async function markPendingPublished(db: D1Database, ids: number[]): Promise<void> {
+  for (let i = 0; i < ids.length; i += 90) {
+    const chunk = ids.slice(i, i + 90);
+    await db
+      .prepare(`UPDATE sites SET status = 'published', updated_at = datetime('now') WHERE status = 'pending' AND id IN (${chunk.map(() => '?').join(',')})`)
+      .bind(...chunk)
+      .run();
+  }
+}
+
 export async function allCategories(db: D1Database): Promise<CategoryRow[]> {
   const { results } = await db.prepare('SELECT * FROM categories ORDER BY taxonomy, term').all<CategoryRow>();
   return results;

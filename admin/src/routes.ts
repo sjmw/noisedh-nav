@@ -1,10 +1,11 @@
-// /api/admin/* 核心路由（spec §6，publish 除外 → Task 8 补进本函数）。
+// /api/admin/* 核心路由（spec §6，含 Task 8 接入的 POST /api/admin/publish）。
 // 约定：handleAdmin 仅在「路径不属于 /api/admin/」时返回 null（index.ts 继续往下分发）；
 // 属于 /api/admin/ 但未匹配到端点 → 404 jsonError。鉴权由 index.ts 在进入前统一 requireAuth。
 // 响应壳：单行 {site}、列表 {sites,total,page,perPage}、分类 {categories}；错误一律 {error,message}。
 
 import { parseChromeBookmarks } from './bookmarks';
 import { analyzeAndUpsert } from './pipeline';
+import { doPublish } from './publish';
 import { jsonError } from './errors';
 import {
   listSites, getSiteById, insertSite, updateSite, deleteSite,
@@ -150,9 +151,12 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
     return fail('bad_request', '方法不支持');
   }
 
-  // ── Task 8 接缝：POST /api/admin/publish ──
-  // if (p === '/api/admin/publish' && req.method === 'POST') return handlePublish(req, env);
-  // 在接入前 publish 落入下方 404（不返回 null，保持「null=非 admin 路径」不变式）。
+  // ── Task 8：POST /api/admin/publish（spec §5；鉴权已在 index 层完成）──
+  if (p === '/api/admin/publish' && req.method === 'POST') {
+    const r = await doPublish(env, db);
+    if (!r.ok) return fail(r.code, r.message);
+    return json({ commitUrl: r.commitUrl, count: r.count });
+  }
 
   return jsonError('bad_request', '接口不存在', 404); // 路径不属于本表：404（code 枚举无 not_found，取 bad_request 承载）
 

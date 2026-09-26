@@ -168,12 +168,25 @@ describe('/api/admin/categories', () => {
   });
 });
 
-describe('未知路径与 publish 接缝', () => {
-  it('/api/admin/zzz → 404；POST /api/admin/publish 在 Task 8 前为 404 占位', async () => {
+describe('publish 路由与未知路径', () => {
+  it('/api/admin/zzz → 404', async () => {
     const res = await dev.fetch('/api/admin/zzz', { headers: auth });
     expect(res.status).toBe(404);
-    const pub = await post('/api/admin/publish', {});
-    expect(pub.status).toBe(404);
+  });
+  it('POST /api/admin/publish 无管理令牌 → 401 unauthorized（鉴权在 index 层，先于 doPublish）', async () => {
+    const res = await dev.fetch('/api/admin/publish', { method: 'POST' });
+    expect(res.status).toBe(401);
+    expect(await getJson(res)).toMatchObject({ error: 'unauthorized' });
+  });
+  it('POST /api/admin/publish 有令牌但 Worker env 无 GITHUB_TOKEN → 502 jsonError 信封（配置护栏，不发起真实 GitHub 请求）', async () => {
+    const res = await post('/api/admin/publish', {});
+    expect(res.status).toBe(502);
+    const body = await getJson(res); // 单次读取：Response body 不可消费两遍
+    expect(body).toMatchObject({ error: 'fetch_failed' });
+    expect(typeof body.message).toBe('string');
+  });
+  it('GET /api/admin/publish → 404（仅 POST）', async () => {
+    expect((await dev.fetch('/api/admin/publish', { headers: auth })).status).toBe(404);
   });
 });
 
