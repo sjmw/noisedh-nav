@@ -15,8 +15,8 @@ export class GithubApiError extends Error {
 const GH_API = 'https://api.github.com';
 const CHUNK = 0x8000; // 32768：String.fromCharCode 安全实参上限的保守值
 
-// spec §8：外部调用带超时（GitHub 慢/挂起时不吊死 isolate）；重试刻意不做——
-// publish 的 PUT 任何情况下只发一次（spec §5.4），统一在此层保持简单。
+// spec §8：外部调用带超时（GitHub 慢/挂起时不吊死 isolate）；GET 另有单次重试（spec §8「超时与单次重试」）——
+// 读操作幂等，重试安全；写操作刻意不重试（spec §5.4：publish 的 PUT 任何情况下只发一次），ghPut 不走该路径。
 const TIMEOUT_MS = 15_000;
 
 const ghHeaders = (token: string): Record<string, string> => ({
@@ -40,12 +40,29 @@ export function b64EncodeUtf8(text: string): string {
   return btoa(bin);
 }
 
-/** GET /repos/{repo}/contents/{path}?ref=main → 解码后的文件文本 + 当前 sha（PUT 乐观锁用） */
+/** GET /repos/{repo}/contents/{path}?ref=main → 解码后的文件文本 + 当前 sha（PUT 乐观锁用）。
+ *  spec §8 单次重试：仅限瞬时失败（fetch 抛出=网络/超时，或 5xx）——GET 幂等，重试安全；
+ *  4xx（凭据/路径错误）为确定性失败不重试；PUT（ghPut）维持 at-most-once（spec §5.4），不经此路径。 */
 export async function ghGet(
   repo: string,
   path: string,
   token: string,
   fetchImpl: typeof fetch = globalThis.fetch,
+): Promise<{ text: string; sha: string }> {
+  try {
+    return await ghGetOnce(repo, path, token, fetchImpl);
+  } catch (e) {
+    const transient = !(e instanceof GithubApiError) || e.status >= 500;
+    if (!transient) throw e;
+    return ghGetOnce(repo, path, token, fetchImpl);
+  }
+}
+
+async function ghGetOnce(
+  repo: string,
+  path: string,
+  token: string,
+  fetchImpl: typeof fetch,
 ): Promise<{ text: string; sha: string }> {
   const url = `${GH_API}/repos/${repo}/contents/${path}?ref=main`;
   const res = await fetchImpl(url, { headers: ghHeaders(token), signal: AbortSignal.timeout(TIMEOUT_MS) });

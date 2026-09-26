@@ -137,7 +137,9 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
       try {
         row = await updateSite(db, id, patch as SitePatch);
       } catch (e) {
-        if (/UNIQUE/i.test(String((e as Error)?.cause ?? e))) return fail('dup_url', '该 URL 已存在'); // 改 url 撞已有行
+        // UNIQUE 检测与 pipeline.ts:123 同口径（belt-and-braces）：D1 冲突信息可能在 e.message 或 e.cause，两处都试
+        const en = e as Error & { cause?: unknown };
+        if (/UNIQUE/i.test(`${String(en?.cause ?? en)} ${String(en?.message ?? '')}`)) return fail('dup_url', '该 URL 已存在'); // 改 url 撞已有行
         throw e;
       }
       if (!row) return jsonError('bad_request', '站点不存在', 404);

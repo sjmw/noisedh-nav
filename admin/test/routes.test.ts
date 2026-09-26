@@ -46,9 +46,10 @@ describe('/api/admin 鉴权', () => {
       expect(await getJson(res)).toMatchObject({ error: 'unauthorized' });
     }
   });
-  it('非 /api/admin 路径不由 handleAdmin 接管（null 透传，暂由 index 兜底）', async () => {
+  it('非 /api/admin 路径不由 handleAdmin 接管（null 透传），index 兜底为真 404（Task 12：废除 200 ok 占位）', async () => {
     const res = await dev.fetch('/api/other');
-    expect(res.status).toBe(200); // index 占位 'ok'，Task 10 扩展层接管
+    expect(res.status).toBe(404);
+    expect(await getJson(res)).toMatchObject({ error: 'bad_request' }); // spec §8 统一 {error,message} 外壳
   });
 });
 

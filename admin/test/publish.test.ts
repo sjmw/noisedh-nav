@@ -85,6 +85,26 @@ describe('github.ts：Contents 读写与 UTF-8 编解码', () => {
     expect((err as GithubApiError).status).toBe(401);
   });
 
+  it('ghGet 单次重试（spec §8）：瞬时失败（fetch 抛出/5xx）重试恰 1 次；4xx 确定性失败不重试', async () => {
+    // 第 1 次抛（等价超时/断网），第 2 次成功 → 共 2 次调用且结果正确
+    const { calls, fetchImpl } = mkFetch([
+      () => { throw new Error('模拟 TimeoutError（AbortSignal.timeout）'); },
+      { body: { content: wrap(b64(YML_CN)), sha: 'sha-retry' } },
+    ]);
+    const r = await ghGet('a/b', 'data/webstack.yml', 'tok', fetchImpl);
+    expect(r.text).toBe(YML_CN);
+    expect(r.sha).toBe('sha-retry');
+    expect(calls).toHaveLength(2);
+    // 5xx 亦瞬时：重试 1 次后仍失败即抛出，绝不第 3 次
+    const f2 = mkFetch([{ status: 502, body: { message: 'bad gateway' } }, { status: 502, body: { message: 'bad gateway' } }]);
+    await expect(ghGet('a/b', 'p', 'tok', f2.fetchImpl)).rejects.toMatchObject({ status: 502 });
+    expect(f2.calls).toHaveLength(2);
+    // 401 为确定性失败：不重试，仅 1 次
+    const f3 = mkFetch([{ status: 401, body: { message: 'Bad credentials' } }]);
+    await expect(ghGet('a/b', 'p', 'tok', f3.fetchImpl)).rejects.toBeInstanceOf(GithubApiError);
+    expect(f3.calls).toHaveLength(1);
+  });
+
   it('大文件往返：≈190KB 中文 yml 编解码逐字节一致（分块防 spread 溢出；sha 过期后 PUT 的 content 可被 ghGet 原样解回）', async () => {
     const big = '- title: 频道页面标题\n  url: https://ch.example.test/页面-' + '哈'.repeat(2) + '\n';
     const text = '---\n' + big.repeat(5000); // ≈ 200KB UTF-8
@@ -176,6 +196,20 @@ describe('doPublish（发布即快照 + 冲突中止）', () => {
     expect(r).toMatchObject({ ok: false, code: 'fetch_failed' });
     expect(calls).toHaveLength(2); // 失败后不再 GET/PUT（不重试）
     expect((await getSiteByUrl(db, 'https://pend-d.test/'))?.status).toBe('pending');
+  });
+
+  it('首 GET 抛（超时/断网）→ ghGet 重试后发布照常成功；PUT 仍恰 1 次（重试只护幂等 GET，不碰 §5.4 姿态）', async () => {
+    await seed('https://pend-retry.test/', 'pending', '重试频道F');
+    const { calls, fetchImpl } = mkFetch([
+      () => { throw new Error('模拟 TimeoutError'); }, // 第 1 次 GET 抛
+      okGet('sha-r'),                                  // ghGet 单次重试命中
+      okPut()[0]!,
+    ]);
+    const r = await doPublish(mkEnv(), db, fetchImpl);
+    expect(r.ok).toBe(true);
+    expect(calls.map((c) => c.method)).toEqual(['GET', 'GET', 'PUT']);
+    expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(1);
+    expect((await getSiteByUrl(db, 'https://pend-retry.test/'))?.status).toBe('published');
   });
 
   it('缺 GITHUB_TOKEN → fetch_failed 且零网络调用；REPO 未配置 → 落默认 sjmw/noisedh-nav', async () => {

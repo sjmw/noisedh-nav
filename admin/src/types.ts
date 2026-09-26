@@ -32,4 +32,7 @@ export interface Env {
   FAVICON_TEMPLATE: string;
   REPO: string;
   DB: D1Database;
+  // Assets 绑定（wrangler 依 assets.directory 自动注入）：index.ts 处理 /admin 改写时使用；
+  // 测试配置（test/wrangler.routes.json）无 assets，运行时以 `env.ASSETS &&` 存在性守卫
+  ASSETS: Fetcher;
 }

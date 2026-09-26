@@ -270,9 +270,16 @@ $('publish-btn').addEventListener('click', async (btn) => {
 });
 
 /* ---------- 导入视图 ---------- */
+const MAX_IMPORT_BYTES = 10 * 1024 * 1024; // 与服务端 routes.ts MAX_IMPORT_BYTES（spec §4.1）同值
 $('import-file').addEventListener('change', () => {
   const f = $('import-file').files && $('import-file').files[0];
   if (!f) return;
+  // 客户端预检：>10MB 直接 toast 跳过，不读文件也不发请求（服务端仍按解码后 UTF-8 字节兜底拒 413）
+  if (f.size > MAX_IMPORT_BYTES) {
+    toast(`文件「${f.name}」约 ${(f.size / 1024 / 1024).toFixed(1)} MB，超过 10MB 上限，已忽略`, { type: 'err', ttl: 8000 });
+    $('import-file').value = '';
+    return;
+  }
   const rd = new FileReader();
   rd.onload = () => {
     const html = String(rd.result || '');
