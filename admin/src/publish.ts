@@ -16,6 +16,12 @@ import type { Env } from './types';
 const PATH = 'data/webstack.yml'; // friendlinks.yml 永不触碰（spec §5）
 const DEFAULT_REPO = 'sjmw/noisedh-nav'; // spec §2.1 配置表给定仓库；REPO 未配置时落此默认
 
+// 发布保护闸（终局评审 Important #1）：0 行闸 + 50% 骤降闸。
+// 骤降闸对远端文本用行计数正则粗计条目数（`- title:` 行数）：刻意不引入 js-yaml 到运行时
+// （零依赖全局约束），是「粗粒度上限守卫」——只拦明显异常的快照（宁拒不误推），误拒可人工复核后重试。
+const MIN_REMOTE_FOR_RATIO_GATE = 20;
+const countRemoteEntries = (text: string): number => (text.match(/^\s*- title:/gm) ?? []).length;
+
 export type PublishResult =
   | { ok: true; commitUrl: string; count: number }
   | { ok: false; code: ErrCode; message: string };
@@ -44,10 +50,23 @@ export async function doPublish(
     return { ok: false, code: 'bad_request', message: (e as Error).message };
   }
 
+  // 闸一（0 行）：置于 ghGet 之前——空库拒发不烧任何 GitHub 请求
+  if (snapshot.length === 0) {
+    return { ok: false, code: 'bad_request', message: 'D1 中没有任何站点，拒绝发布（疑似未灌种子或库被清空）' };
+  }
+
   const message = `后台发布：${snapshot.length} 条站点（${pending.length} 条新增）`;
   let commitUrl: string;
   try {
-    const { sha } = await ghGet(repo, PATH, token, fetchImpl);
+    // ghGet 提前到骤降闸之前（闸二需要远端文本作对账基线）。PUT 至多一次与 409 仅重 GET 对账的姿态不变：
+    // 本函数全程仍以「一次 GET → 至多一次 PUT（409 时补一次对账 GET）」为固定请求序列。
+    const { sha, text: remoteText } = await ghGet(repo, PATH, token, fetchImpl);
+    // 闸二（骤降）：远端条目数 ≥ 20 且快照不足其一半 → 疑似误清空/未灌种即发布，拒绝（消息含两个数字供人工对账）。
+    // remoteCount 为粗粒度上限守卫（行计数而非 YAML 解析），误拒可人工复核后修数据重试，误放才是大事故，故取保守向。
+    const remoteCount = countRemoteEntries(remoteText);
+    if (remoteCount >= MIN_REMOTE_FOR_RATIO_GATE && snapshot.length * 2 < remoteCount) {
+      return { ok: false, code: 'bad_request', message: `快照仅 ${snapshot.length} 条站点，不足远端 ${remoteCount} 条的一半，疑似误发布，已拒绝（请核对 D1 数据后重试）` };
+    }
     try {
       commitUrl = (await ghPut(repo, PATH, yml, sha, message, token, fetchImpl)).commitUrl;
     } catch (e) {

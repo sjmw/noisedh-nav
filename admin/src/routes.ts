@@ -7,7 +7,7 @@ import { parseChromeBookmarks } from './bookmarks';
 import { normalizeUrl } from './url';
 import { analyzeAndUpsert } from './pipeline';
 import { doPublish } from './publish';
-import { jsonError } from './errors';
+import { jsonError, errStatus, readJsonBody } from './errors';
 import {
   listSites, getSiteById, insertSite, updateSite, deleteSite,
   allCategories, upsertCategory, deleteCategory,
@@ -26,21 +26,9 @@ const PATCH_FIELDS = ['url', 'url_raw', 'title', 'description', 'logo', 'taxonom
 
 const json = (data: unknown, status = 200): Response => Response.json(data, { status });
 
-const errByCode: Record<ErrCode, number> = {
-  unauthorized: 401, bad_request: 400, dup_url: 409, fetch_failed: 502,
-  ai_invalid: 502, github_conflict: 409, too_large: 413,
-};
+// errStatus（错误码→HTTP 状态）与 readJsonBody 已收口至 errors.ts（终局评审 minor-5，纯搬移）
 function fail(code: ErrCode, message: string): Response {
-  return jsonError(code, message, errByCode[code]);
-}
-
-async function readJsonBody(req: Request): Promise<Record<string, unknown> | null> {
-  try {
-    const v: unknown = await req.json();
-    return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
+  return jsonError(code, message, errStatus[code]);
 }
 
 // spec §8 统一错误外壳：路由体内任何逃逸异常 → 500 {error,message} JSON（而非 Cloudflare 纯文本）。
@@ -192,7 +180,10 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
         if (i >= parsed.length) return;
         const bm = parsed[i]!;
         try {
-          const r = await analyzeAndUpsert({ url: bm.url, source: 'import' }, env, db);
+          // title 一并入参（终局评审 Important #4）：parser 已产出 bm.title，此前被丢弃致降级行标题退化为 host。
+          // 仅 title 不带 taxonomy 不触发直通跳过（src/pipeline.ts:93，跳过需 title+taxonomy 同非空），
+          // 仍走抓取+AI，仅按 hint 语义字段覆盖。明确不做：folder→taxonomy、addDate→created_at（已 parked）。
+          const r = await analyzeAndUpsert({ url: bm.url, title: bm.title, source: 'import' }, env, db);
           items[i] = r.ok
             ? { url: bm.url, status: 'added', reason: '' }
             : { url: bm.url, status: r.code === 'dup_url' ? 'skipped_dup' : 'failed', reason: r.code };
@@ -231,8 +222,11 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
         await restore();
         return fail(r.code, '重新分析失败');
       }
-      // 重分析不改发布状态与排序（人工确认语义由 PATCH/publish 承担）
-      const kept: SiteRow = (await updateSite(db, r.row.id, { status: orig.status, sort: orig.sort })) ?? r.row;
+      // 重分析不改发布状态与排序（人工确认语义由 PATCH/publish 承担）；
+      // url_raw 必须一并回写保留（终局评审 Important #3）：analyzeAndUpsert({url: orig.url}) 会把
+      // 新行 url_raw 烤成规范化键（seed-dup 行含 #seed-dup-N 尾巴），而展示与导出走 url_raw（src/yml.ts
+      // 的 q(r.url_raw || r.url)）——不回写原值等于把 dedup 尾巴发布上线。
+      const kept: SiteRow = (await updateSite(db, r.row.id, { status: orig.status, sort: orig.sort, url_raw: orig.url_raw })) ?? r.row;
       return json({ site: kept });
     } catch (e) {
       // analyzeAndUpsert/回写阶段抛异常：原行已删，必须先回滚再报 502（code 枚举无 internal，取 fetch_failed 承载内部失败）

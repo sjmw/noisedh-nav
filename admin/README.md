@@ -87,8 +87,10 @@ npx wrangler d1 execute navdata --remote --file=./seed.sql --yes
 
 ## 步骤 7 · publish 干跑
 
-> ⚠️ **顺序警告**：**绝不可在未灌种子（步骤 6）或 D1 被清空的库上调用** `POST /api/admin/publish`——
-> doPublish 没有最小行数保护，会把近乎空的 `data/webstack.yml` 推到线上仓库。步骤 6（seed）必须先于步骤 7（publish）。
+> ⚠️ **顺序警告**：步骤 6（seed）必须先于步骤 7（publish）。现在 `doPublish` 已有**代码闸**
+> （终局评审 Important #1 落地）：① 快照 0 行直接拒绝（`bad_request`，不发起任何 GitHub 请求）；
+> ② 骤降闸——远端 `- title:` 条目数 ≥ 20 且快照行数不足其一半时拒绝（PUT 至多一次的姿态不变）。
+> 文字警告降为背景说明：闸只拦明显异常，空库灌种顺序仍是部署手册层面的第一道防线。
 
 ```bash
 curl -sS -X POST https://nav.wzyo.top/api/admin/publish -H "Authorization: Bearer <ADMIN_TOKEN>"
@@ -102,8 +104,10 @@ curl -sS -X POST https://nav.wzyo.top/api/admin/publish -H "Authorization: Beare
 
 1. 电脑浏览器开 `https://nav.wzyo.top/admin` → 输入 ADMIN_TOKEN → 「进入」→ 列表出现 381 行（seed 全量）
 2. 手机 Chrome 装 `extension/Nav-manage-extension` → 选项里 serverUrl 改 `https://nav.wzyo.top`、token 填 ADMIN_TOKEN
-3. 任意网页点扩展「收藏」→ 回 `/admin` 列表筛选「待发布」→ 出现 pending 行 → 编辑标题 → 「批量发布」
+3. 任意网页点扩展「收藏」→ 回 `/admin` 列表筛选「待发布」→ 出现 pending 行 → 编辑标题 → 「批量发布」（确认弹窗会列出即将上线的 pending 清单）
 4. GitHub 仓库出现发布 commit → Pages 自动构建 → 前台刷新可见新条目
+
+> 大书签文件导入若出现部分失败：若因超时/限流部分失败，直接再点一次导入即可续传（已加入的会记为 skipped_dup）。
 
 ## 回滚
 

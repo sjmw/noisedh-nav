@@ -107,6 +107,21 @@ describe('POST /api/yaml（收藏写入，Bearer）', () => {
       expect(String(body.message)).toContain('只读');
     }
   });
+  it('严格白名单：文件名（小写）不含 webstack → 同款 501 信封且不落库', async () => {
+    // 修复前 kindOf 未知名默认落 webstack 域 → 任意文件名都可写；popup 只发三型文件名，兼容不受影响
+    const res = await postYaml(yamlBody({ title: '白名单测', url: 'https://wlstrict.invalid' }, 'notes.yml'));
+    expect(res.status).toBe(501);
+    const body = await jf(res);
+    expect(body.error).toBe('bad_request');
+    expect(String(body.message)).toContain('notes.yml');
+    expect((await jf(await dev.fetch('/api/admin/sites?q=wlstrict', { headers: auth }))).total).toBe(0);
+    // 历史路径形态（kindOf 兼容注释）仍放行：含 webstack 即视为 webstack 域
+    const ok = await postYaml(yamlBody({ title: '路径形', url: 'https://wlpath.invalid' }, 'data/webstack.yml'));
+    expect(ok.status).toBe(204);
+    const list = await jf(await dev.fetch('/api/admin/sites?q=wlpath', { headers: auth }));
+    expect(list.total).toBe(1);
+    await dev.fetch(`/api/admin/sites/${list.sites[0].id}`, { method: 'DELETE', headers: auth }); // 清理
+  });
   it('缺 url / 非法 URL → 400 bad_request', async () => {
     expect((await postYaml({ filename: 'webstack.yml', newDataEntry: { title: 'x', kind: 'webstack', taxonomy: 'T' }, allowCreateCategory: true })).status).toBe(400);
     expect((await postYaml(yamlBody({ url: 'javascript:alert(1)' }))).status).toBe(400);
@@ -169,6 +184,11 @@ describe('DELETE /api/delete（Bearer）', () => {
     const res = await dev.fetch('/api/delete', { method: 'DELETE', headers: authJson, body: JSON.stringify({ filename: 'friendlinks.yml', title: 'x', kind: 'friendlinks' }) });
     expect(res.status).toBe(501);
     expect(String((await jf(res)).message)).toContain('只读');
+  });
+  it('严格白名单：文件名（小写）不含 webstack → 501（修复前 kindOf 未知名默认按 webstack 域处理）', async () => {
+    const res = await dev.fetch('/api/delete', { method: 'DELETE', headers: authJson, body: JSON.stringify({ filename: 'notes.yml', title: '查无此题', kind: 'webstack' }) });
+    expect(res.status).toBe(501);
+    expect(await jf(res)).toMatchObject({ error: 'bad_request' });
   });
   it('webstack 同名两行 → 删最早 id（204），后一行保留', async () => {
     const a = await mkSite('https://collide1.invalid', { title: '同名题', taxonomy: 'EXTD' });

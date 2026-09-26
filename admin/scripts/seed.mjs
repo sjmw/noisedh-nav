@@ -1,6 +1,6 @@
 // Task 9 seed 生成器（Node 本地脚本，可依赖 js-yaml；与 src/ 的零运行时依赖约束隔离）
 // 仓库根 data/webstack.yml → admin/seed.sql：DELETE 后全量 INSERT，source='seed'、status='published'。
-// 裁定记录（详见 task-9-report.md）：
+// 裁定记录（详见 test/seed.test.mjs 闸口断言）：
 //  (a) sites.url 存 normalizeUrl 结果（去重键），url_raw 存原样；发布导出走 url_raw（见 src/yml.ts）。
 //  (b) 真实文件中 3 个 URL 各出现两次（不同条目、同一规范化键）：UNIQUE(url) 只容首现行，
 //      第 2..n 次出现的 url 追加 '#seed-dup-N' 片段后缀保唯一；url_raw 仍为原样，导出不受影响。

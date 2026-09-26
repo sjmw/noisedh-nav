@@ -115,15 +115,29 @@ describe('/api/admin/sites CRUD', () => {
     expect((await getJson(await dev.fetch('/api/admin/sites?q=delme', { headers: auth }))).total).toBe(0);
     expect((await dev.fetch('/api/admin/sites/999999', { method: 'DELETE', headers: auth })).status).toBe(204); // 幂等
   });
-  it('POST :id/analyze 重跑流水线：标题重算但保留 status/sort，id 变化', async () => {
-    const created = (await getJson(await post('/api/admin/sites', { url: 'https://reanalyze.invalid', title: '初始题' }))).site;
+  it('POST :id/analyze 重跑流水线：标题重算但保留 status/sort/url_raw，id 变化', async () => {
+    // url_raw=原样输入（含大小写/尾斜杠），url=规范化键——重分析后 url_raw 必须存活不被覆盖
+    const created = (await getJson(await post('/api/admin/sites', { url: 'HTTPS://Reanalyze.Invalid/Keep', title: '初始题' }))).site;
     await dev.fetch(`/api/admin/sites/${created.id}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ status: 'published', sort: 3 }) });
     const res = await post(`/api/admin/sites/${created.id}/analyze`, {});
     expect(res.status).toBe(200);
     const { site } = await getJson(res);
     expect(site.id).not.toBe(created.id);
-    expect(site).toMatchObject({ url: created.url, status: 'published', sort: 3 });
+    expect(site).toMatchObject({ url: created.url, url_raw: created.url_raw, status: 'published', sort: 3 });
     expect(site.title).not.toBe('初始题'); // 重跑不带旧显式字段 → 降级题（host）
+    await dev.fetch(`/api/admin/sites/${site.id}`, { method: 'DELETE', headers: auth }); // 清理
+  });
+  it('POST :id/analyze seed-dup 行（url 带 #seed-dup-2 尾巴）→ url_raw 不被烤入尾巴', async () => {
+    // 模拟 seed-dup 形态（见 scripts/seed.mjs 裁定 b）：url 为去重键（含后缀），url_raw 为真实地址。
+    // 修复前：重分析经 analyzeAndUpsert({url: orig.url}) 把 url_raw 覆盖成含尾巴的规范化键，下次发布导出脏值。
+    const created = (await getJson(await post('/api/admin/sites', { url: 'https://seeddup.invalid' }))).site;
+    await dev.fetch(`/api/admin/sites/${created.id}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ url: 'https://seeddup.invalid#seed-dup-2' }) });
+    await dev.fetch(`/api/admin/sites/${created.id}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ url_raw: 'https://seeddup.invalid/' }) });
+    const res = await post(`/api/admin/sites/${created.id}/analyze`, {});
+    expect(res.status).toBe(200);
+    const { site } = await getJson(res);
+    expect(site.url).toContain('#seed-dup-2'); // 去重键保持含尾巴（唯一性不受影响）
+    expect(site.url_raw).toBe('https://seeddup.invalid/'); // 展示与导出源保真，不含尾巴
     await dev.fetch(`/api/admin/sites/${site.id}`, { method: 'DELETE', headers: auth }); // 清理
   });
   it('POST :id/analyze 不存在 id → 404', async () => {
@@ -163,6 +177,18 @@ describe('/api/admin/import', () => {
     expect(r).toMatchObject({ added: 1, skipped_dup: 24, failed: 0 });
     expect((await post('/api/admin/import', {})).status).toBe(400);
     expect((await dev.fetch('/api/admin/import', { method: 'POST', headers: authJson, body: '{not json' })).status).toBe(400);
+  }, 120_000);
+  it('书签标题参与导入：目标 .invalid 抓取必失败 → 降级行 title = 书签标题而非 host', async () => {
+    // 修复前 handleImport 只传 {url,source}，parser 产出的 bm.title 被丢弃，降级行标题退化为 host。
+    // title 单独给出不触发直通跳过（跳过需 title+taxonomy 同非空，见 src/pipeline.ts:93 语义），仍抓取+AI、仅字段覆盖。
+    const html = '<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<DL><p>\n<DT><H3>账户</H3>\n<DL><p>\n<DT><A HREF="https://bmtitle.invalid/" ADD_DATE="1600000000">我的书签标题</A>\n</DL><p>\n</DL><p>';
+    const res = await post('/api/admin/import', { html });
+    expect(res.status).toBe(200);
+    expect(await getJson(res)).toMatchObject({ added: 1, skipped_dup: 0, failed: 0 });
+    const list = await getJson(await dev.fetch('/api/admin/sites?q=bmtitle', { headers: auth }));
+    expect(list.total).toBe(1);
+    expect(list.sites[0]).toMatchObject({ title: '我的书签标题', url: 'https://bmtitle.invalid', url_raw: 'https://bmtitle.invalid/', status: 'pending', source: 'import' });
+    await dev.fetch(`/api/admin/sites/${list.sites[0].id}`, { method: 'DELETE', headers: auth }); // 清理
   }, 120_000);
 });
 

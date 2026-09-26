@@ -104,6 +104,8 @@ CREATE TABLE categories (
 
 发布前 pending→published 由人工在管理页单条/批量确认（防止脏数据直达线上）。
 
+（2026-09-27 裁定：发布即快照——publish 时全部 pending 随快照上线，人工确认前移到发布按钮的 pending 清单弹窗）
+
 ### 4.1 Chrome 书签导入
 
 Netscape Bookmark File Format：解析 `DL`/`DT`/`H3` 嵌套结构，文件夹路径即分类建议（首层 `H3` 是浏览器账户名，丢弃；`其他书签`/`bookmark bar` 记入 `hint`）。条目走同一流水线；`ADD_DATE` 保留为 `created_at` 参考。解析器手写（正则+状态机，约 100 行，无第三方依赖），输入上限 10MB。
@@ -119,6 +121,8 @@ Netscape Bookmark File Format：解析 `DL`/`DT`/`H3` 嵌套结构，文件夹�
 5. 成功返回 commit URL；Pages 自动构建上线
 
 `friendlinks.yml` 永不触碰。pending 条目不进导出。
+
+（2026-09-27 裁定：发布即快照——publish 时全部 pending 随快照上线，人工确认前移到发布按钮的 pending 清单弹窗）
 
 ## 6. HTTP 接口
 

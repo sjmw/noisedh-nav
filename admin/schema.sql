@@ -1,4 +1,4 @@
-CREATE TABLE sites (
+CREATE TABLE IF NOT EXISTS sites (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   url TEXT NOT NULL UNIQUE,            -- 规范化后
   url_raw TEXT NOT NULL,               -- 原样，用于展示与导出
@@ -15,7 +15,7 @@ CREATE TABLE sites (
 );
 CREATE INDEX idx_sites_status ON sites(status, taxonomy, term, sort);
 
-CREATE TABLE categories (
+CREATE TABLE IF NOT EXISTS categories (
   taxonomy TEXT NOT NULL,
   term TEXT NOT NULL DEFAULT '',
   icon TEXT NOT NULL DEFAULT 'fas fa-folder-open fa-lg',
@@ -24,7 +24,7 @@ CREATE TABLE categories (
 );
 
 -- Task 10：扩展推送参数（POST /api/server-settings，扁平字符串键值原样存储、Worker 不解释）
--- 带 IF NOT EXISTS：对已建库的部署环境重放本文件不报错（前两张表为历史既定，不改动）
+-- 带 IF NOT EXISTS：对已建库的部署环境重放本文件不报错（终局评审 minor-2：sites/categories 同步补齐）
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL DEFAULT '',

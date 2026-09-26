@@ -255,14 +255,32 @@ $('page-next').addEventListener('click', () => {
 
 /* ---------- 批量发布 ---------- */
 $('publish-btn').addEventListener('click', async (btn) => {
-  if (!confirm('把所有待发布站点写入 webstack.yml 并推送 GitHub（触发前台 Pages 重建）？')) return;
-  btn.disabled = true; btn.textContent = '发布中…';
+  // 终局评审 Important #2 裁定落地：保留「发布即快照」，但确认前必须列出将要上线的 pending 清单
+  // （人工确认前移到发布按钮的弹窗）。零 innerHTML 约束：confirm 原生文本，列表用 string join。
+  btn.disabled = true; btn.textContent = '读取待发布清单…';
+  let pending;
+  try {
+    pending = await api('sites?status=pending&perPage=200'); // 现有接口；total 给全量条数，清单最多展示 15 条
+  } catch (e) {
+    if (e.status !== 401) toast('读取待发布清单失败：' + e.message, { type: 'err', ttl: 8000 });
+    btn.disabled = false; btn.textContent = '批量发布';
+    return; // 清单读不到就不进确认——发布是不可逆写线上仓库的动作
+  }
+  const titles = pending.sites.slice(0, 15).map((s) => s.title || s.url_raw || s.url).join('、');
+  const listText = pending.total === 0
+    ? '当前没有待发布站点（本次仅重推现有已发布集合）。'
+    : `待发布 ${pending.total} 条：${titles}${pending.total > 15 ? `…等 ${pending.total} 条` : ''}`;
+  if (!confirm(`把所有待发布站点写入 webstack.yml 并推送 GitHub（触发前台 Pages 重建）？\n${listText}`)) {
+    btn.disabled = false; btn.textContent = '批量发布';
+    return;
+  }
+  btn.textContent = '发布中…';
   try {
     const r = await api('publish', { method: 'POST', body: '{}' });
     toast(`发布成功：${r.count} 条站点已写入 webstack.yml。`, { type: 'ok', linkUrl: r.commitUrl, ttl: 12000 });
     loadList();
   } catch (e) {
-    // 失败路径：后端统一错误信封 {error,message}（如 GITHUB_TOKEN 未配置/冲突），toast 呈现，不崩
+    // 失败路径：后端统一错误信封 {error,message}（如 GITHUB_TOKEN 未配置/冲突/空库与骤降保护闸），toast 呈现，不崩
     if (e.status !== 401) toast('发布失败：' + e.message, { type: 'err', ttl: 10000 });
   } finally {
     btn.disabled = false; btn.textContent = '批量发布';

@@ -235,3 +235,68 @@ describe('doPublish（发布即快照 + 冲突中止）', () => {
     await deleteSite(db, (await getSiteByUrl(db, 'https://mix-c.test/'))!.id);
   });
 });
+
+// ── Fix 3：空库闸 + 骤降闸（独立空库，避免与上方累积共享快照互相干扰）──
+const mfGate = new Miniflare({ log: new Log(LogLevel.ERROR), modules: true, script: 'export default{}', d1Databases: ['DB'], d1Persist: false });
+let gdb: any;
+
+// 远端假文件：n 条链接条目（buildWebstackYml 同款 `- title:` 行形态，供行计数正则粗计）
+const remoteYml = (n: number): string =>
+  '---\n' + Array.from({ length: n }, (_, i) => `- title: 远端站${i}\n  url: https://remote${i}.invalid\n`).join('');
+const remoteGet = (n: number, sha = 'sha-remote'): Reply => ({ body: { content: wrap(b64(remoteYml(n))), sha } });
+
+const gateSeed = async (n: number): Promise<void> => {
+  for (let i = 0; i < n; i++)
+    await insertSite(gdb, { url: `https://gate${i}.invalid/`, url_raw: `https://gate${i}.invalid/`, title: `闸口站${i}`, description: '', logo: '', taxonomy: '闸口类', term: '', status: 'pending', source: 'manual', sort: 0 });
+};
+const gateClear = async (): Promise<void> => { await gdb.prepare('DELETE FROM sites').run(); await gdb.prepare('DELETE FROM categories').run(); };
+
+describe('doPublish 保护闸（空库 + 50% 骤降，终局评审 Important #1）', () => {
+  beforeAll(async () => {
+    gdb = await mfGate.getD1Database('DB');
+    await gdb.exec(readFileSync('schema.sql', 'utf8').replace(/--.*$/gm, '').replace(/\s+/g, ' '));
+  });
+  afterAll(async () => { await mfGate.dispose(); });
+
+  it('空库（0 行）→ bad_request 拒绝且 GitHub 零请求', async () => {
+    await gateClear();
+    const { calls, fetchImpl } = mkFetch([]);
+    const r = await doPublish(mkEnv({ DB: gdb }), gdb, fetchImpl);
+    expect(r).toMatchObject({ ok: false, code: 'bad_request' });
+    expect(String((r as { message?: string }).message)).toContain('没有任何站点');
+    expect(calls).toHaveLength(0); // 闸在 ghGet 之前：不烧任何 GitHub 请求
+  });
+
+  it('骤降闸：远端 100 条、快照 40 条 → 拒绝（消息含两数），PUT 零次，行不翻转', async () => {
+    await gateClear();
+    await gateSeed(40);
+    const { calls, fetchImpl } = mkFetch([remoteGet(100)]);
+    const r = await doPublish(mkEnv({ DB: gdb }), gdb, fetchImpl);
+    expect(r).toMatchObject({ ok: false, code: 'bad_request' });
+    const msg = String((r as { message?: string }).message);
+    expect(msg).toContain('40');
+    expect(msg).toContain('100');
+    expect(calls.map((c) => c.method)).toEqual(['GET']); // 只 GET 对账，绝不 PUT
+    const rows = await allPublishedRows(gdb);
+    expect(rows).toHaveLength(0); // 发布即快照的翻转未发生
+  });
+
+  it('远端 100 条、快照 60 条 → 放行（未破 50% 线），GET→PUT 各恰一次', async () => {
+    await gateClear();
+    await gateSeed(60);
+    const { calls, fetchImpl } = mkFetch([remoteGet(100, 'sha-ok'), okPut()[0]!]);
+    const r = await doPublish(mkEnv({ DB: gdb }), gdb, fetchImpl);
+    expect(r).toMatchObject({ ok: true, count: 60 });
+    expect(calls.map((c) => c.method)).toEqual(['GET', 'PUT']);
+  });
+
+  it('远端仅 3 条、快照 1 条 → 放行（远端低于 20 条阈值不触发骤降闸）', async () => {
+    await gateClear();
+    await gateSeed(1);
+    const { calls, fetchImpl } = mkFetch([remoteGet(3, 'sha-small'), okPut()[0]!]);
+    const r = await doPublish(mkEnv({ DB: gdb }), gdb, fetchImpl);
+    expect(r).toMatchObject({ ok: true, count: 1 });
+    expect(calls.map((c) => c.method)).toEqual(['GET', 'PUT']);
+    await gateClear();
+  });
+});

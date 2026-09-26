@@ -8,14 +8,13 @@ import { analyzeAndUpsert } from './pipeline';
 import { normalizeUrl } from './url';
 import { buildWebstackYml } from './yml';
 import { ghGet } from './github';
-import { jsonError } from './errors';
+import { jsonError, errStatus, readJsonBody } from './errors';
 import {
   getSiteByUrl, updateSite, deleteSite, findOldestSiteByTitle,
   allPublishedRows, allCategories, upsertCategory, listSites,
 } from './db';
 import type { SitePatch } from './db';
 import type { Env } from './types';
-import type { ErrCode } from './errors';
 
 const FILES = ['webstack.yml', 'friendlinks.yml', 'headers.yml'];
 const READ_TTL_MS = 5 * 60 * 1000;
@@ -32,19 +31,12 @@ const kindOf = (name: unknown): 'webstack' | 'friendlinks' | 'headers' => {
   return 'webstack';
 };
 
-const errStatus: Record<ErrCode, number> = {
-  unauthorized: 401, bad_request: 400, dup_url: 409, fetch_failed: 502,
-  ai_invalid: 502, github_conflict: 409, too_large: 413,
-};
+// errStatus（错误码→HTTP 状态）与 readJsonBody 已收口至 errors.ts（终局评审 minor-5，纯搬移）
 
-async function readJsonBody(req: Request): Promise<Record<string, unknown> | null> {
-  try {
-    const v: unknown = await req.json();
-    return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
+// 严格白名单（终局评审 minor-1）：kindOf 的「未知名默认落 webstack」是读面/搜索面的宽容兼容，
+// 写面不可继承——文件名（小写）不含 webstack 一律按 friendlinks/headers 同款 501 信封拒绝。
+// popup 只发三型文件名（webstack/friendlinks/headers.yml 及 data/webstack.yml 历史路径形），兼容不受影响。
+const writableWebstack = (name: unknown): boolean => String(name ?? '').toLowerCase().includes('webstack');
 
 // 与 handleAdmin 同一外壳约定：仅在「路径不属于本兼容层」时返回 null（index.ts 继续往下）
 export async function handleExtension(
@@ -115,6 +107,9 @@ async function route(req: Request, u: URL, env: Env, deps: { fetchImpl?: typeof 
     if (kindOf(body.filename) !== 'webstack') {
       return jsonError('bad_request', `${body.filename} 为只读透传文件（friendlinks.yml/headers.yml 不纳入 D1，不支持写入）`, 501);
     }
+    if (!writableWebstack(body.filename)) {
+      return jsonError('bad_request', `${body.filename} 不在可写白名单：文件名需含 webstack（friendlinks.yml/headers.yml 只读透传，其余文件域不存在）`, 501);
+    }
     const url = str('url');
     if (url === '') return jsonError('bad_request', 'newDataEntry.url 必填', 400);
     const r = await analyzeAndUpsert(
@@ -147,6 +142,9 @@ async function route(req: Request, u: URL, env: Env, deps: { fetchImpl?: typeof 
     if (!body || typeof body.title !== 'string' || body.title === '') return jsonError('bad_request', '需要 {filename,title,kind}', 400);
     if (kindOf(body.filename) !== 'webstack') {
       return jsonError('bad_request', `${body.filename} 为只读透传文件（friendlinks.yml/headers.yml 不纳入 D1，不支持删除）`, 501);
+    }
+    if (!writableWebstack(body.filename)) {
+      return jsonError('bad_request', `${body.filename} 不在可删白名单：文件名需含 webstack（friendlinks.yml/headers.yml 只读透传，其余文件域不存在）`, 501);
     }
     // 同名按最早 id 删除（追加序=文件展示序，删旧留新）；查无此题 → 204 幂等（popup 只判 res.ok）
     const row = await findOldestSiteByTitle(db, body.title);
