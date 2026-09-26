@@ -16,7 +16,7 @@ GitHub → Settings → Developer settings → **Fine-grained tokens** → Gener
 
 - 仓库范围：**Only select repositories → `sjmw/noisedh-nav`**（单仓，最小权限，安全红线：绝不选 All repositories）
 - Permissions → Contents：**Read and write**（仅此一项；Administration/Metadata 无需手动勾，fine-grained 会自动带 Metadata）
-- 不设过期或按个人习惯；生成后妥善保存（只显示一次）
+- **设置过期时间**（如 90/180 天）并同时在日历里设好续期提醒：fine-grained 单仓 + 仅 Contents 写权限，泄露面已最小，带过期的 PAT 是更稳妥的常态；到期按提醒重新生成。生成后妥善保存（只显示一次）
 
 ## 步骤 2 · 创建 D1 并回填 database_id
 
@@ -80,7 +80,15 @@ npx wrangler d1 execute navdata --remote --file=./seed.sql --yes
 
 `seed.sql` 由 `npm run seed` 从 `data/webstack.yml` 生成（round-trip 零漂移闸口由测试保证）。
 
+> ⚠️ **全量替换警告**：`seed.sql` 开头是 `DELETE FROM sites; DELETE FROM categories;`，而 `--yes` 会跳过
+> wrangler 的交互确认——执行 `--remote` 这条命令会**替换线上全部行**，冒烟期间收集到的 pending/编辑中
+> 条目会一并丢失。跑之前先备份：
+> `npx wrangler d1 execute navdata --remote --command "SELECT * FROM sites" --json > backup.json`
+
 ## 步骤 7 · publish 干跑
+
+> ⚠️ **顺序警告**：**绝不可在未灌种子（步骤 6）或 D1 被清空的库上调用** `POST /api/admin/publish`——
+> doPublish 没有最小行数保护，会把近乎空的 `data/webstack.yml` 推到线上仓库。步骤 6（seed）必须先于步骤 7（publish）。
 
 ```bash
 curl -sS -X POST https://nav.wzyo.top/api/admin/publish -H "Authorization: Bearer <ADMIN_TOKEN>"
@@ -103,7 +111,7 @@ curl -sS -X POST https://nav.wzyo.top/api/admin/publish -H "Authorization: Beare
 |---|---|
 | 内容（GitHub） | 在 `sjmw/noisedh-nav` revert 对应发布 commit，Pages 随重构建 |
 | 数据（D1） | `npx wrangler d1 execute navdata --remote --file=./seed.sql --yes` 重灌基线 |
-| Worker | `npx wrangler deployments list` 找上一次部署 ID → `npx wrangler rollback <deployment-id>`（wrangler 4.141 该顶层命令即版本回滚，无 `versions rollback` 子命令） |
+| Worker | `npx wrangler deployments list` 找上一次 Worker Version ID → `npx wrangler rollback <deployment-id>`（wrangler 4.141 该顶层命令即版本回滚，位置参数为 Worker Version ID，无 `versions rollback` 子命令） |
 
 ## 本地冒烟（不碰远程的等价验证）
 

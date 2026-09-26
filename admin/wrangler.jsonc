@@ -13,7 +13,7 @@
     {
       "binding": "DB",
       "database_name": "navdata"
-      // database_id 在 `wrangler d1 create navdata` 后回填（Task 12 手册步骤 1，见 admin/README.md）
+      // database_id 在 `wrangler d1 create navdata` 后回填（Task 12 手册步骤 2，见 admin/README.md）
     }
   ],
   // 非密配置按 spec §2.1 走 vars（明文入仓库无泄露面）；密仅 ADMIN_TOKEN/GITHUB_TOKEN/（可选）AI_* 三项 secret
@@ -21,5 +21,5 @@
     "DEFAULT_TAXONOMY": "未分类",
     "FAVICON_TEMPLATE": "https://icons.duckduckgo.com/ip3/{host}.ico"
   }
-  // 区域路由（nav.wzyo.top/admin*、/api/*、/data*）在部署时创建，见 spec §2.2 与 README 手册步骤 4
+  // 区域路由（nav.wzyo.top/admin*、/api/*、/data*）在部署时创建，见 spec §2.2 与 README 手册步骤 5
 }
