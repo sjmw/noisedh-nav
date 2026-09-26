@@ -14,8 +14,9 @@ import type { SitePatch } from './db';
 import type { Env, SiteRow } from './types';
 import type { ErrCode } from './errors';
 
-// 导入体积闸（任务约束收紧为 1MB；spec §4.1 写的 10MB 是文件格式上限，body 守卫从严）
-const MAX_IMPORT_BYTES = 1024 * 1024;
+// 导入体积闸（spec §4.1：输入上限 10MB）——按「解码后的 html 字符串」的 UTF-8 字节数计，
+// 而非 JSON 请求体：JSON 转义（\" 等）会膨胀体积，按 body 计会让实际可用的 html 低于名义上限。
+const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
 const IMPORT_CONCURRENCY = 3;
 const PATCH_FIELDS = ['title', 'description', 'logo', 'taxonomy', 'term', 'status', 'sort'] as const;
 
@@ -38,7 +39,18 @@ async function readJsonBody(req: Request): Promise<Record<string, unknown> | nul
   }
 }
 
+// spec §8 统一错误外壳：路由体内任何逃逸异常 → 500 {error,message} JSON（而非 Cloudflare 纯文本）。
+// code 枚举固定 7 项、无 internal/server 类 code，取语义最近的 fetch_failed 承载「上游/内部失败」，状态用 500（见报告说明）。
 export async function handleAdmin(req: Request, u: URL, env: Env): Promise<Response | null> {
+  try {
+    return await routeAdmin(req, u, env);
+  } catch (e) {
+    console.error('admin route unhandled error:', u.pathname, e);
+    return jsonError('fetch_failed', '服务器内部错误', 500);
+  }
+}
+
+async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | null> {
   const p = u.pathname;
   if (!p.startsWith('/api/admin/')) return null;
   const db = env.DB;
@@ -75,16 +87,16 @@ export async function handleAdmin(req: Request, u: URL, env: Env): Promise<Respo
 
   // ── 书签批量导入 ──
   if (p === '/api/admin/import' && req.method === 'POST') {
-    const raw = await req.text();
-    if (new TextEncoder().encode(raw).length > MAX_IMPORT_BYTES) return fail('too_large', '请求体超过 1MB 上限');
     let body: Record<string, unknown> | null = null;
     try {
-      const v: unknown = JSON.parse(raw);
+      const v: unknown = JSON.parse(await req.text());
       body = typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
     } catch {
       body = null;
     }
     if (!body || typeof body.html !== 'string' || body.html.trim() === '') return fail('bad_request', '需要 JSON {html:string}');
+    // 体积闸按解码后 html 的 UTF-8 字节数计（spec §4.1，10MB）
+    if (new TextEncoder().encode(body.html).length > MAX_IMPORT_BYTES) return fail('too_large', 'html 超过 10MB 上限');
     return handleImport(body.html);
   }
 
@@ -177,19 +189,31 @@ export async function handleAdmin(req: Request, u: URL, env: Env): Promise<Respo
   async function handleReanalyze(id: number): Promise<Response> {
     const orig = await getSiteById(db, id);
     if (!orig) return jsonError('bad_request', '站点不存在', 404);
-    // 流水线带 UNIQUE(url) 查重：先删原行腾位；失败路径回滚原行
+    // 流水线带 UNIQUE(url) 查重：先删原行腾位；失败路径（含异常）回滚原行
     await deleteSite(db, id);
     const restore = async (): Promise<void> => {
-      const { id: _i, created_at: _c, updated_at: _u, ...cols } = orig;
-      await insertSite(db, cols);
+      try {
+        const { id: _i, created_at: _c, updated_at: _u, ...cols } = orig;
+        await insertSite(db, cols);
+      } catch (e) {
+        // 回滚自身也可能 UNIQUE 冲突（如新行已插入后 updateSite 才抛）——此处只记录，不再抛出，保证统一返回错误信封
+        console.error('reanalyze rollback failed:', id, e);
+      }
     };
-    const r = await analyzeAndUpsert({ url: orig.url, source: orig.source }, env, db);
-    if (!r.ok) {
+    try {
+      const r = await analyzeAndUpsert({ url: orig.url, source: orig.source }, env, db);
+      if (!r.ok) {
+        await restore();
+        return fail(r.code, '重新分析失败');
+      }
+      // 重分析不改发布状态与排序（人工确认语义由 PATCH/publish 承担）
+      const kept: SiteRow = (await updateSite(db, r.row.id, { status: orig.status, sort: orig.sort })) ?? r.row;
+      return json({ site: kept });
+    } catch (e) {
+      // analyzeAndUpsert/回写阶段抛异常：原行已删，必须先回滚再报 502（code 枚举无 internal，取 fetch_failed 承载内部失败）
       await restore();
-      return fail(r.code, '重新分析失败');
+      console.error('reanalyze threw:', id, e);
+      return fail('fetch_failed', '重新分析失败');
     }
-    // 重分析不改发布状态与排序（人工确认语义由 PATCH/publish 承担）
-    const kept: SiteRow = (await updateSite(db, r.row.id, { status: orig.status, sort: orig.sort })) ?? r.row;
-    return json({ site: kept });
   }
 }

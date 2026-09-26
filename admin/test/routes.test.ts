@@ -6,7 +6,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
 import { unstable_dev } from 'wrangler';
+import { handleAdmin } from '../src/routes';
 import type { Unstable_DevWorker as UnstableDevWorker } from 'wrangler';
+import type { Env, SiteRow } from '../src/types';
 
 const CFG = 'test/wrangler.routes.json';
 const PERSIST = '.wrangler-test';
@@ -134,13 +136,23 @@ describe('/api/admin/import', () => {
     const bad = r.items.find((i: { url: string }) => i.url === 'javascript:alert(1)');
     expect(bad).toMatchObject({ status: 'failed', reason: 'bad_request' });
   }, 120_000);
-  it('html 超 1MB → too_large 413；缺 html → 400', async () => {
-    const big = await post('/api/admin/import', { html: 'x'.repeat(1024 * 1024 + 10) });
+  it('html 超 10MB → too_large 413；~2.5MB 重复书签可通过（体积按解码后 html UTF-8 字节计）', async () => {
+    const big = await post('/api/admin/import', { html: 'x'.repeat(10 * 1024 * 1024 + 10) });
     expect(big.status).toBe(413);
     expect(await getJson(big)).toMatchObject({ error: 'too_large' });
+    // 100KB 级 A 标签块重复 25 次 ≈ 2.5MB html：远超旧 1MB 闸、低于 10MB 上限 → 结构上应成功；
+    // 全部同 URL → 仅首条走抓取入库，其余 D1 判重即返回；条目数刻意保持小，避免 dev isolate 内存/CPU 连带污染后续请求
+    const block = `<DT><A HREF="https://sizegate.invalid/" ADD_DATE="1600000000">` + 't'.repeat(100 * 1024) + `</A>\n`;
+    const html = '<DL><p>\n' + block.repeat(25) + '</DL>\n';
+    expect(new TextEncoder().encode(html).length).toBeGreaterThan(2 * 1024 * 1024);
+    const mid = await post('/api/admin/import', { html });
+    expect(mid.status).toBe(200);
+    const r = await getJson(mid);
+    expect(r.items.length).toBe(25);
+    expect(r).toMatchObject({ added: 1, skipped_dup: 24, failed: 0 });
     expect((await post('/api/admin/import', {})).status).toBe(400);
     expect((await dev.fetch('/api/admin/import', { method: 'POST', headers: authJson, body: '{not json' })).status).toBe(400);
-  });
+  }, 120_000);
 });
 
 describe('/api/admin/categories', () => {
@@ -162,5 +174,82 @@ describe('未知路径与 publish 接缝', () => {
     expect(res.status).toBe(404);
     const pub = await post('/api/admin/publish', {});
     expect(pub.status).toBe(404);
+  });
+});
+
+// ── 单元级：reanalyze 抛异常回滚 + 顶层错误外壳 ──
+// 集成环境（unstable_dev）里流水线没有自然抛异常的路径：.invalid 抓取走降级返回（ok:false）而非 throw，
+// 也无法在「删除之后」注入 D1 故障——故直接调用 handleAdmin，用按 SQL 前缀分派的 D1 假件驱动该分支。
+
+const origRow: SiteRow = {
+  id: 5, url: 'https://rollback.invalid/', url_raw: 'https://rollback.invalid/',
+  title: '原题', description: '', logo: '', taxonomy: 'T', term: '', status: 'published', source: 'manual', sort: 3,
+  created_at: '2026-01-01 00:00:00', updated_at: '2026-01-01 00:00:00',
+};
+
+const makeStubDb = (restoreConflict: boolean) => {
+  const calls: string[] = [];
+  const unexpected = (sql: string) => new Error('unexpected SQL in stub: ' + sql);
+  const db = {
+    prepare: (sql: string) => {
+      // D1 语句既可 bind() 后再执行，也可直接执行（allCategories 无参 SELECT）——两种形态都要支持
+      const exec = {
+        first: async () => {
+          if (sql.startsWith('SELECT * FROM sites WHERE id')) { calls.push('get'); return origRow; }
+          if (sql.startsWith('SELECT * FROM sites WHERE url')) { calls.push('dupcheck'); return null; }
+          if (sql.startsWith('INSERT INTO sites')) {
+            calls.push('restore');
+            if (restoreConflict) throw new Error('D1_ERROR: UNIQUE constraint failed: sites.url');
+            return origRow;
+          }
+          throw unexpected(sql);
+        },
+        run: async () => {
+          if (sql.startsWith('DELETE FROM sites')) { calls.push('delete'); return {}; }
+          throw unexpected(sql);
+        },
+        all: async () => {
+          if (sql.startsWith('SELECT * FROM categories')) { calls.push('boom'); throw new Error('D1_ERROR: 模拟流水线中段 D1 故障'); }
+          throw unexpected(sql);
+        },
+      };
+      return { bind: (..._vals: never[]) => exec, ...exec };
+    },
+  };
+  return { calls, db: db as unknown as D1Database };
+};
+
+const stubEnv = (DB: D1Database) =>
+  ({ DB, ADMIN_TOKEN: 't', GITHUB_TOKEN: '', DEFAULT_TAXONOMY: '未分类', FAVICON_TEMPLATE: '', REPO: 'a/b' }) as unknown as Env;
+
+describe('reanalyze 异常回滚与错误外壳（单元级）', () => {
+  // handleAdmin 对 /api/admin/ 前缀路径恒不返回 null（不变式），此处显式收窄
+  const expectRes = (r: Response | null): Response => {
+    if (!r) throw new Error('handleAdmin 对 /api/admin/ 路径不应返回 null');
+    return r;
+  };
+  const analyze = async (db: D1Database) =>
+    expectRes(await handleAdmin(new Request('http://internal/api/admin/sites/5/analyze', { method: 'POST' }), new URL('http://internal/api/admin/sites/5/analyze'), stubEnv(db)));
+
+  it('流水线删除原行后抛异常 → 回滚原行并返回 502 {error:fetch_failed}', async () => {
+    const { calls, db } = makeStubDb(false);
+    const res = await analyze(db);
+    expect(res.status).toBe(502);
+    expect(await getJson(res)).toMatchObject({ error: 'fetch_failed' });
+    expect(calls).toEqual(['get', 'delete', 'dupcheck', 'boom', 'restore']); // 删除后异常 → 回滚插入发生
+  });
+  it('回滚插入自身 UNIQUE 冲突 → 不再抛出，仍返回 502 统一信封', async () => {
+    const { calls, db } = makeStubDb(true);
+    const res = await analyze(db);
+    expect(res.status).toBe(502);
+    expect(await getJson(res)).toMatchObject({ error: 'fetch_failed' });
+    expect(calls).toEqual(['get', 'delete', 'dupcheck', 'boom', 'restore']);
+  });
+  it('路由体内无兜底位置抛异常 → 错误外壳产出 500 JSON {error:fetch_failed}（而非 Cloudflare 纯文本）', async () => {
+    const brokenDb = { prepare: () => { throw new Error('D1 完全不可用'); } } as unknown as D1Database;
+    const res = expectRes(await handleAdmin(new Request('http://internal/api/admin/sites'), new URL('http://internal/api/admin/sites'), stubEnv(brokenDb)));
+    expect(res.status).toBe(500);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(await getJson(res)).toEqual({ error: 'fetch_failed', message: '服务器内部错误' });
   });
 });
