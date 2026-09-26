@@ -315,7 +315,8 @@ $('import-go').addEventListener('click', async (btn) => {
   try {
     const r = await api('import', { method: 'POST', body: JSON.stringify({ html }) });
     renderImportResult(r);
-    toast(`导入完成：新增 ${r.added}，重复跳过 ${r.skipped_dup}，失败 ${r.failed}`, { type: r.failed ? 'err' : 'ok', ttl: 8000 });
+    const resumeHint = r.failed ? '。若因超时/限流部分失败，直接再点一次导入即可续传（已加入的会记为 skipped_dup）' : '';
+    toast(`导入完成：新增 ${r.added}，重复跳过 ${r.skipped_dup}，失败 ${r.failed}${resumeHint}`, { type: r.failed ? 'err' : 'ok', ttl: 8000 });
   } catch (e) {
     if (e.status !== 401) toast('导入失败：' + e.message, { type: 'err', ttl: 8000 });
   } finally {
