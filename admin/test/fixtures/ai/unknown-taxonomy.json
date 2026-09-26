@@ -1,0 +1,9 @@
+{
+  "choices": [
+    {
+      "message": {
+        "content": "{\"title\":\"t\",\"description\":\"d\",\"taxonomy\":\"外星分类\",\"term\":\"\",\"new_category\":false}"
+      }
+    }
+  ]
+}
