@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "noisedh-admin",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-26",
+  "assets": {
+    "directory": "public"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "navdata"
+    }
+  ]
+  // 区域路由（nav.wzyo.top/admin*、/api/*）在部署时创建，见 spec §2.2
+}
