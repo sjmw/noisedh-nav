@@ -11,6 +11,11 @@ export async function getSiteById(db: D1Database, id: number): Promise<SiteRow |
   return (await db.prepare('SELECT * FROM sites WHERE id = ?').bind(id).first<SiteRow>()) ?? null;
 }
 
+// 扩展兼容层 DELETE-by-title 用：同名多行时取最早 id（追加序=展示序，删旧留新）
+export async function findOldestSiteByTitle(db: D1Database, title: string): Promise<SiteRow | null> {
+  return (await db.prepare('SELECT * FROM sites WHERE title = ? ORDER BY id LIMIT 1').bind(title).first<SiteRow>()) ?? null;
+}
+
 export async function insertSite(db: D1Database, row: Omit<SiteRow, 'id' | 'created_at' | 'updated_at'>): Promise<SiteRow> {
   const inserted = await db
     .prepare(`INSERT INTO sites (url, url_raw, title, description, logo, taxonomy, term, status, source, sort)

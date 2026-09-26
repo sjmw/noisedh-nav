@@ -22,3 +22,11 @@ CREATE TABLE categories (
   sort INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (taxonomy, term)
 );
+
+-- Task 10：扩展推送参数（POST /api/server-settings，扁平字符串键值原样存储、Worker 不解释）
+-- 带 IF NOT EXISTS：对已建库的部署环境重放本文件不报错（前两张表为历史既定，不改动）
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
