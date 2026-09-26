@@ -1,4 +1,4 @@
-baseURL = "https://www.noisedh.cn"
+baseURL = "https://nav.wzyo.top/"
 languageCode = "zh-CN"
 title = "Noise导航 & 收录值得珍藏的网站"
 theme = "noisedh-nav-v2"
@@ -21,9 +21,14 @@ relativeURLs = true
     baseName = "bookmarks"
     isPlainText = true
     notAlternative = true
+  [outputFormats.searchindex]
+    mediaType = "application/json"
+    baseName = "search-index"
+    isPlainText = true
+    notAlternative = true
 
 [outputs]
-  home = ["HTML", "RSS", "bookmarks"]
+  home = ["HTML", "RSS", "bookmarks", "searchindex"]
 
 # 网站参数配置
 [params]
@@ -42,7 +47,7 @@ relativeURLs = true
   og_title = "NOISE导航 - 发现值得珍藏的网站"
   og_description = "NOISE导航是一个综合类导航网站，提供AI、新媒体、影视、设计、编程等行业分类导航，发现值得珍藏的网站"
   og_image = "https://cdn.jsdelivr.net/gh/rcy1314/phototc@main/uPic/screenshot06.png"
-  og_url = "https://www.noisedh.cn"
+  og_url = "https://nav.wzyo.top/"
   twitter_title = "NOISE导航 - 发现值得珍藏的网站"
   twitter_description = "NOISE导航是一个综合类导航网站，提供AI、新媒体、影视、设计、编程等行业分类导航，发现值得珍藏的网站"
   twitter_image = "https://cdn.jsdelivr.net/gh/rcy1314/phototc@main/uPic/screenshot1.png"
@@ -145,10 +150,11 @@ exportBookmarksUrl = "./bookmarks.html"
 
 
 # 头部收录通知路由recentSitesApi、网址统计路由statisticsApi、后端服务地址serverUrl
-recentSitesApi = "https://你的后端地址/api/notifications"
+# 使用同源相对路径，真实后端地址由 Cloudflare Worker 反代配置（改地址零重建）；勿置空，置空会回落到原作者服务器
+recentSitesApi = "/api/notifications"
 statisticsApi = ""
 statisticsMode = "local"
-serverUrl = "https://你的后端地址"
+serverUrl = "/api"
 
 # 广告位配置
 adList = [
