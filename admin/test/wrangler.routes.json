@@ -1,0 +1,18 @@
+{
+  "name": "noisedh-admin-routetest",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-26",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "navdata-test",
+      "database_id": "2c40dfc8-371c-4f78-b009-40a3a23785a2"
+    }
+  ],
+  "vars": {
+    "ADMIN_TOKEN": "t",
+    "DEFAULT_TAXONOMY": "未分类",
+    "FAVICON_TEMPLATE": "https://icon.invalid/{host}.ico",
+    "REPO": "noisedh/noisedh-nav"
+  }
+}

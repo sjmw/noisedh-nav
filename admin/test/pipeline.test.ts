@@ -124,6 +124,32 @@ describe('analyzeAndUpsert（AI 路径与降级细则）', () => {
     if (!r.ok) throw new Error('should pass');
     expect(r.row.logo).toBe('my.png');
   });
+
+  it('AI 合法但 description 为空串 → 回落基线 description（不留空）', async () => {
+    const calls: string[] = []; const bodies: string[] = [];
+    const fetchImpl = routerFetch({
+      calls, bodies,
+      pageHtml: '<title>页题E</title><meta name="description" content="页述E">',
+      aiContent: { title: 'AI题E', description: '', taxonomy: '工具', term: '', new_category: false },
+    });
+    const r = await analyzeAndUpsert({ url: 'https://emptydesc.cn', source: 'manual' }, aiEnv(), db, { fetchImpl });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.row).toMatchObject({ title: 'AI题E', description: '页述E', taxonomy: '工具' });
+  });
+});
+
+describe('analyzeAndUpsert（并发竞态，Task 6 结转）', () => {
+  it('同 URL 并发双写：恰一成功、另一为 dup_url 且不抛异常', async () => {
+    // 直通路径（title+taxonomy 齐）零网络，两次调用都会通过前置查重后并发走到 INSERT，
+    // 由 UNIQUE(url) 触发竞态：后提交者必须被 catch 转为 {ok:false,code:'dup_url'}。
+    const env = { DEFAULT_TAXONOMY: '未分类', FAVICON_TEMPLATE: '' } as any;
+    const opts = { url: 'https://race.test/dup', title: '竞态题', taxonomy: '竞态分' };
+    const rs = await Promise.all([analyzeAndUpsert(opts, env, db), analyzeAndUpsert(opts, env, db)]);
+    expect(rs.filter((r) => r.ok)).toHaveLength(1);
+    expect(rs.find((r) => !r.ok)).toEqual({ ok: false, code: 'dup_url' });
+    const row = await getSiteByUrl(db, 'https://race.test/dup');
+    expect(row?.title).toBe('竞态题');
+  });
 });
 
 describe('db 助手（真实 D1 round-trip）', () => {

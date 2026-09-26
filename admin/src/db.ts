@@ -7,6 +7,10 @@ export async function getSiteByUrl(db: D1Database, url: string): Promise<SiteRow
   return (await db.prepare('SELECT * FROM sites WHERE url = ?').bind(url).first<SiteRow>()) ?? null;
 }
 
+export async function getSiteById(db: D1Database, id: number): Promise<SiteRow | null> {
+  return (await db.prepare('SELECT * FROM sites WHERE id = ?').bind(id).first<SiteRow>()) ?? null;
+}
+
 export async function insertSite(db: D1Database, row: Omit<SiteRow, 'id' | 'created_at' | 'updated_at'>): Promise<SiteRow> {
   const inserted = await db
     .prepare(`INSERT INTO sites (url, url_raw, title, description, logo, taxonomy, term, status, source, sort)
@@ -81,4 +85,8 @@ export async function upsertCategory(db: D1Database, cat: { taxonomy: string; te
               ON CONFLICT(taxonomy, term) DO NOTHING`)
     .bind(cat.taxonomy, cat.term ?? '', cat.icon ?? 'fas fa-folder-open fa-lg', cat.sort ?? 0)
     .run();
+}
+
+export async function deleteCategory(db: D1Database, taxonomy: string, term: string): Promise<void> {
+  await db.prepare('DELETE FROM categories WHERE taxonomy = ? AND term = ?').bind(taxonomy, term).run();
 }

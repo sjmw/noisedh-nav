@@ -78,7 +78,8 @@ export async function analyzeAndUpsert(
     // aiAnalyze 全有或全无返回；这里再执行「trim 后 taxonomy 为空 → 视同不合规」的落库前校验（Task 5 结转裁决 a）
     if (aiOk && trim(aiOk.taxonomy) !== '') {
       title = trim(aiOk.title) || base.title || host;
-      description = trim(aiOk.description);
+      // AI 合法但 description 为空串（校验允许）→ 回落基线，不采信空值（Task 6 结转）
+      description = trim(aiOk.description) || base.description;
       taxonomy = trim(aiOk.taxonomy);
       term = trim(aiOk.term);
     } else {
@@ -103,17 +104,24 @@ export async function analyzeAndUpsert(
     await upsertCategory(db, { taxonomy, term });
   }
 
-  const row = await insertSite(db, {
-    url,
-    url_raw: raw,
-    title,
-    description,
-    logo,
-    taxonomy,
-    term,
-    status: 'pending',
-    source: trim(opts.source) || 'manual',
-    sort: 0, // 默认 0（schema 缺省），排序调整由管理页 PATCH 承担
-  });
+  let row: SiteRow;
+  try {
+    row = await insertSite(db, {
+      url,
+      url_raw: raw,
+      title,
+      description,
+      logo,
+      taxonomy,
+      term,
+      status: 'pending',
+      source: trim(opts.source) || 'manual',
+      sort: 0, // 默认 0（schema 缺省），排序调整由管理页 PATCH 承担
+    });
+  } catch (e) {
+    // 前置查重通过后的并发竞态：UNIQUE(url) 冲突说明已被他人插入，语义等同 dup（Task 6 结转）
+    if (String((e as { message?: unknown })?.message).includes('UNIQUE constraint failed: sites.url')) return { ok: false, code: 'dup_url' };
+    throw e;
+  }
   return { ok: true, row, deduped: false };
 }
