@@ -1,0 +1,205 @@
+---
+- taxonomy: 常用推荐
+  icon: far fa-star
+  links:
+    - title: 频道页面
+      logo: https://jsd.cdn.noisework.cn/gh/rcy1314/tuchuang@main/uPic/7877y.jpeg
+      url: https://tg.noisework.cn
+      description: 我的TG频道页面
+    - title: 说说笔记
+      logo: https://s2.loli.net/2025/04/07/fgn9WUwZbcGXpDk.png
+      url: https://note.noisework.cn
+      description: 个人朋友圈说说
+    - title: NOISE&Blog
+      logo: pin.png
+      url: https://www.noiseblogs.top
+      description: 我的博客站
+    - title: NOISE主页
+      logo: https://jsd.cdn.noisework.cn/gh/rcy1314/tuchuang@main/20230801/NOISELOGO.4cy9whhpaf00.jpg
+      url: https://www.noisework.cn
+      description: 个人引导页，站点入口
+    - title: NOISE资源库
+      logo: https://jsd.cdn.noisework.cn/gh/rcy1314/tuchuang@main/20230801/image.5fpszsmze5s0.jpg
+      url: https://noiseyp.top
+      description: 云盘资源库
+    - title: NOISE宝藏阁
+      logo: https://jsd.cdn.noisework.cn/gh/rcy1314/tuchuang@main/20230801/1122r.420m6b1mgl40.jpg
+      url: https://www.noisevip.cn
+      description: NOISE宝藏阁
+    - title: 本站备用1
+      logo: https://jsd.cdn.noisework.cn/gh/rcy1314/tuchuang@main/uPic/n1.jpeg
+      url: https://noisedaohang.netlify.app
+      description: 本站备用访问地址,托关于netlify，域名：noisedaohang.netlify.app
+    - title: 本站备用2
+      logo: https://jsd.cdn.noisework.cn/gh/rcy1314/tuchuang@main/uPic/n2.jpeg
+      url: https://daohang-c5k.pages.dev
+      description: 本站备用访问地址，托关于cloudflare，域名：daohang-c5k.pages.dev
+    - title: 本站备用3
+      logo: https://jsd.cdn.noisework.cn/gh/rcy1314/tuchuang@main/uPic/n3.jpeg
+      url: https://www.noisedh.link
+      description: 本站备用主访问地址，域名：noisedh.link
+    - title: 本站备用4
+      logo: https://jsd.cdn.noisework.cn/gh/rcy1314/tuchuang@main/uPic/n4.jpeg
+      url: https://noisedh.maozi.io
+      description: 托管于帽子云，为本站备用地址
+    - title: 本站备用5
+      logo: https://jsd.cdn.noisework.cn/gh/rcy1314/tuchuang@main/uPic/n5.jpeg
+      url: https://www.noisedh.cn
+      description: 本站访问地址，www.noisedh.cn
+    - title: 本站备用6
+      logo: https://jsd.cdn.noisework.cn/gh/rcy1314/tuchuang@main/uPic/n6.jpeg
+      url: https://noisedh.vercel.app
+      description: 本站备用访问地址，托关于vercel，请科学访问noisedh.vercel.app
+    - title: 今日热榜
+      logo: 今日热榜.jpg
+      url: https://tophub.today
+      description: 提供各站热榜聚合：微信、今日头条、知乎...追踪全网热点、简单高效阅读
+    - title: Efficiency主页
+      logo: binoculars.jpg
+      url: https://efficiencyfollow.notion.site
+      description: 栏目为主综合Notion收录增长页
+    - title: 新片场
+      logo: 新片场.jpg
+      url: https://www.xinpianchang.com
+      description: 质量上乘的视频大开眼界
+    - title: 天空之城
+      logo: 天空之城.jpg
+      url: https://www.skypixel.com
+      description: 世界各地的航拍摄影师、拍手叫绝的航拍作品与独具价值的航拍攻略。全世界的探索者们互相启发，乐在其中。现在加入天空之城，换个角度看世界！。
+    - title: 哔哩哔哩
+      logo: 哔哩哔哩.jpg
+      url: https://www.bilibili.com
+      description: 哔哩哔哩
+    - title: Pinterest
+      logo: Pinterest.png
+      url: https://www.pinterest.com
+      description: 全球设计创意灵感
+    - title: vercel
+      logo: vercel.png
+      url: https://vercel.com
+      description: vercel
+    - title: Netlify
+      logo: netlify.png
+      url: https://app.netlify.com
+      description: Netlify
+    - title: SwitchHosts
+      logo: https://cdn.jsdelivr.net/gh/rcy1314/tuchuang@main/uPic/logo@512w.png
+      url: https://github.com/oldj/SwitchHosts
+      description: 解决无法访问github问题同时，是一个管理、切换多个 hosts 方案的工具。它是一个免费开源软件
+    - title: Github
+      logo: github.jpg
+      url: https://github.com
+      description: github
+    - title: Railway
+      logo: railway.png
+      url: https://railway.app
+      description: railway
+    - title: cloudflare
+      logo: cloudflare.png
+      url: https://dash.cloudflare.com
+      description: cloudflare
+- taxonomy: 媒体创作
+  icon: fas fa-folder-open fa-lg
+  list:
+    - term: CG三维
+      links:
+        - title: CG爱好者
+          logo: www.cgahz.com.ico
+          url: http://www.cgahz.com
+          description: 影视后期相关资源
+        - title: CG99-CG设计网
+          logo: cg99.ico
+          url: https://www.cg99.com
+          description: 专注全球CG设计行业，以CG模型为主的资源下载和分享平台
+        - title: 斑斓魔法CG
+          logo: https://jsd.cdn.noisework.cn/gh/rcy1314/tuchuang@main/20221027/blcg.4p6swepuwps0.png
+          url: https://www.blendermagic.cn
+          description: 专注于Blender的定时开源网站
+        - title: CG说
+          logo: www.cgshuo.com.ico
+          url: http://www.cgshuo.com
+          description: 原创CG设计资源、素材交易平台
+        - title: ABOUTCG
+          logo: www.aboutcg.com.ico
+          url: https://www.aboutcg.com
+          description: 最新CG行业资讯
+        - title: CG模型王
+          logo: www.cgmxw.com.ico
+          url: https://www.cgmxw.com
+          description: 各类CG模型
+        - title: CG资源网
+          logo: www.cgtsj.com.ico
+          url: https://www.cgfxw.net
+          description: 各类CG资源
+        - title: 中文汉化
+          logo: h.shanse8.com.ico
+          url: http://h.shanse8.com
+          description: CG 各领域的经典原创汉化作品，有 3D 软件、2D 软件、影视后期、非编等主流软件及其插件的汉化
+        - title: 立体派
+          logo: www.ltpmx.com.ico
+          url: http://www.ltpmx.com
+          description: C4D模型
+        - title: biubiu游戏美术论坛
+          logo: www.biubiuiu.com.ico
+          url: https://www.magicsart.com
+          description: 最专业的游戏特效师，动画师社区
+        - title: CG帮
+          logo: www.cgboo.com.ico
+          url: https://www.cgboo.com
+          description: 3D模型、游戏原画、AE模版资源网
+        - title: CGJOY
+          logo: CGJOY.png
+          url: https://www.cgjoy.com
+          description: 3D特效师、动画师、模型、ui交流平台
+        - title: 模匠网
+          logo: www.3dsmj.com.ico
+          url: https://www.3dsmj.com
+          description: 各类3D模型下载
+        - title: 微妙网
+          logo: www.wmiao.com.ico
+          url: https://www.wmiao.com
+          description: 专业的动画师、特效师、建模师交流网站
+        - title: 魔顿
+          logo: 魔顿.jpg
+          url: http://www.modown.cn
+          description: 免费C4D资源下载
+        - title: 免费三维模型
+          logo: free3d.com.ico
+          url: https://free3d.com
+          description: 完全免费的3D模型下载
+        - title: 菜鸟C4D
+          logo: www.c4dcn.com.ico
+          url: http://www.c4dcn.com
+          description: C4D学习站
+        - title: Sketchfab
+          logo: sketchfab.com.ico
+          url: https://sketchfab.com
+          description: 大量的免费三维模型下载站
+        - title: R站
+          logo: www.btbat.com.ico
+          url: https://www.btbat.com
+          description: 专注三维模型
+        - title: iiidea CG
+          logo: iiidea.png
+          url: http://iiidea.cn
+          description: CG资源网
+        - title: C4DNB
+          logo: c4dnb.png
+          url: http://c4dnb.com
+          description: C4D资源下载网
+        - title: 可动程序
+          logo: https://cgexe.com/wp-content/uploads/2022/05/favicon.png
+          url: https://cgexe.com
+          description: 可动程序_致力于分享CG资讯
+        - title: Blender中国
+          logo: https://www.blendercn.org/favicon.ico
+          url: https://www.blendercn.org/
+          description: Blender中国社区 – 这里有Blender的最新资讯
+        - title: 魔行网
+          logo: https://www.moxingg.com/wp-content/uploads/2024/08/%E8%B5%84%E6%BA%90-22.png
+          url: https://www.moxingg.com/
+          description: 魔行网-免费C4D资源网站，无需会员可下载海量C4D素材
+        - title: C4D社区 – 3D动画制作动态设计师交流平台
+          logo: https://c4dcg-1252310774.file.myqcloud.com/wp-content/uploads/2022/11/20221110103853cropped-20221110103840C4D605982-32x32.png
+          url: https://c4dcg.com/
+          description: C4D社区为您展示优秀的动态视频展示，为优秀的广大3D动画动效设计师提供参考灵感，为3D动画制作行业中国用户提供一个优秀良好的交流互动中心。在这里还可以下载到常用的软件工具以及CG素材。

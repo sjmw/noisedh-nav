@@ -11,6 +11,8 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260925.1",
+    "@types/node": "^26.6.3",
+    "js-yaml": "^5.4.2",
     "miniflare": "^3.20250109.0",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0",
