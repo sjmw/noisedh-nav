@@ -1,9 +1,10 @@
 import type { SiteRow, CategoryRow } from './types';
 
-// 转义：仅当字符串含 ": "、#、首尾空格、空串、以 YAML 特殊字符开头或以 : 结尾时用双引号
+// 转义：仅当字符串含 ": "、" #"（YAML 注释仅在空白后起始；词中 '#' 如 URL 片段无需引号）、
+// 首尾空格、空串、以 YAML 特殊字符开头（含行首 #）或以 : 结尾时用双引号
 const LEAD_SPECIAL = /^[-?:,[\]{}#&*!|>'"%@`]/;
 const q = (s: string): string =>
-  s === '' || s.includes(': ') || s.includes('#') || /:$/u.test(s) || /^\s|\s$/.test(s) || LEAD_SPECIAL.test(s)
+  s === '' || s.includes(': ') || / #/.test(s) || /:$/u.test(s) || /^\s|\s$/.test(s) || LEAD_SPECIAL.test(s)
     ? JSON.stringify(s)
     : s;
 
@@ -55,7 +56,9 @@ export function buildWebstackYml(sites: SiteRow[], categories: CategoryRow[]): s
       .flatMap((r) => {
         const out = [`${pad}- title: ${q(r.title)}`];
         if (r.logo) out.push(`${pad}  logo: ${q(r.logo)}`);
-        out.push(`${pad}  url: ${q(r.url)}`);
+        // Task 9 裁定(a)：导出原样 url_raw（人工维护的 URL 字节保真，
+        // 如末尾 '/'），url 仅作规范化去重键。既有行 url_raw 缺省时回退 url。
+        out.push(`${pad}  url: ${q(r.url_raw || r.url)}`);
         if (r.description) out.push(`${pad}  description: ${q(r.description)}`);
         return out;
       });
