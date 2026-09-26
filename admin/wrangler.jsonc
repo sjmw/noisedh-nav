@@ -12,8 +12,9 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "navdata"
-      // database_id 在 `wrangler d1 create navdata` 后回填（Task 12 手册步骤 2，见 admin/README.md）
+      "database_name": "navdata",
+      "database_id": "427bcdfd-4e8e-4ead-b32e-d81482a2c846"
+      // database_id 来自 `wrangler d1 create navdata`（2026-09-27 已执行，Task 12 手册步骤 2）
     }
   ],
   // 非密配置按 spec §2.1 走 vars（明文入仓库无泄露面）；密仅 ADMIN_TOKEN/GITHUB_TOKEN/（可选）AI_* 三项 secret
