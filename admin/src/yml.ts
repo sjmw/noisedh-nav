@@ -88,3 +88,34 @@ export function buildWebstackYml(sites: SiteRow[], categories: CategoryRow[]): s
   }
   return lines.join('\n') + '\n';
 }
+
+// 管理扩展轮（spec-27 §4）：friendlinks.yml / headers.yml 与 webstack 同纪律——确定性生成、同输入同字节。
+import type { FriendlinkRow, NavitemRow } from './types';
+export function buildFriendlinksYml(rows: FriendlinkRow[]): string {
+  const sorted = [...rows].sort((a, b) => a.sort - b.sort || a.id - b.id);
+  if (!sorted.length) return '[]\n';
+  const lines: string[] = [];
+  for (const r of sorted) {
+    lines.push(`- title: ${q(r.title)}`, `  url: ${q(r.url)}`);
+    if (r.description) lines.push(`  description: ${q(r.description)}`);
+  }
+  return lines.join('\n') + '\n';
+}
+export function buildNavYml(rows: NavitemRow[]): string {
+  const tops = rows.filter((r) => r.parent_id === null).sort((a, b) => a.sort - b.sort || a.id - b.id);
+  if (!tops.length) return '[]\n';
+  const kids = new Map<number, NavitemRow[]>();
+  for (const r of rows) if (r.parent_id !== null) (kids.get(r.parent_id) ?? kids.set(r.parent_id, []).get(r.parent_id)!).push(r);
+  const lines: string[] = [];
+  for (const t of tops) {
+    lines.push(`- item: ${q(t.item)}`);
+    if (t.icon) lines.push(`  icon: ${q(t.icon)}`);
+    lines.push(`  link: ${q(t.link)}`); // 空串显式输出（「更多」纯下拉容器的现状形状）
+    const kidList = (kids.get(t.id) ?? []).sort((a, b) => a.sort - b.sort || a.id - b.id);
+    if (kidList.length) {
+      lines.push('  list:');
+      for (const k of kidList) lines.push(`    - name: ${q(k.item)}`, `      url: ${q(k.link)}`);
+    }
+  }
+  return lines.join('\n') + '\n';
+}

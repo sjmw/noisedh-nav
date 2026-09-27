@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import * as yaml from 'js-yaml';
 import { describe, it, expect } from 'vitest';
-import { buildWebstackYml } from '../src/yml';
-import type { SiteRow, CategoryRow } from '../src/types';
+import { buildWebstackYml, buildFriendlinksYml, buildNavYml } from '../src/yml';
+import type { SiteRow, CategoryRow, FriendlinkRow, NavitemRow } from '../src/types';
 const FIX = 'test/fixtures/webstack.sample.yml';
 const row = (o: Partial<SiteRow>): SiteRow => ({ id: 0, url: o.url!, url_raw: o.url_raw ?? o.url!, title: o.title!, description: o.description ?? '', logo: o.logo ?? '', taxonomy: o.taxonomy!, term: o.term ?? '', status: 'published', source: 'seed', sort: o.sort ?? 0, created_at: '', updated_at: '' });
 describe('buildWebstackYml 不变式', () => {
@@ -42,5 +42,25 @@ describe('buildWebstackYml 不变式', () => {
       { taxonomy: 'T', term: '子项', icon: '', sort: 1 },
     ];
     expect(() => buildWebstackYml(sites, cats)).toThrow(/混用/);
+  });
+});
+
+describe('buildFriendlinksYml / buildNavYml（管理扩展 Task 2）', () => {
+  const fl = (id: number, over: Partial<FriendlinkRow> = {}): FriendlinkRow =>
+    ({ id, title: `友链${id}`, url: `https://f${id}.test`, description: '', sort: 0, created_at: '', updated_at: '', ...over });
+  it('friendlinks：按 sort,id 出 - title/url/description；空表出 []', () => {
+    expect(buildFriendlinksYml([])).toBe('[]\n');
+    expect(buildFriendlinksYml([fl(2, { sort: 1 }), fl(1, { sort: 1, description: '带描述' })]))
+      .toBe('- title: 友链1\n  url: https://f1.test\n  description: 带描述\n- title: 友链2\n  url: https://f2.test\n');
+  });
+  const nv = (id: number, over: Partial<NavitemRow> = {}): NavitemRow =>
+    ({ id, item: `项${id}`, icon: '', link: `./x${id}/`, parent_id: null, sort: 0, created_at: '', updated_at: '', ...over });
+  it('navitems：顶层 item/icon/link，子项挂进父的 list[name,url]；link 空串显式输出', () => {
+    expect(buildNavYml([nv(1), nv(2, { icon: 'fa fa-home' }), nv(21, { parent_id: 2, item: '😀Emoji', link: './assets/emoji/' })]))
+      .toBe('- item: 项1\n  link: ./x1/\n- item: 项2\n  icon: fa fa-home\n  link: ./x2/\n  list:\n    - name: 😀Emoji\n      url: ./assets/emoji/\n');
+    expect(buildNavYml([])).toBe('[]\n');
+  });
+  it('q() 语义继承：含 ": " 的 title 加引号', () => {
+    expect(buildFriendlinksYml([fl(1, { title: 'a: b' })])).toBe('- title: "a: b"\n  url: https://f1.test\n');
   });
 });
