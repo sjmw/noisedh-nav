@@ -1,11 +1,14 @@
-// 冒烟修复轮：分类形态归一（resolveCategoryShape）与孤儿清理（pruneOrphanCategories）单测。
+// 冒烟修复轮：分类形态归一（resolveCategoryShape）单测。
 // miniflare 真 D1（同 pipeline.test.ts 模式）：策略表六行逐行断言 + union 双来源取证。
+// 管理扩展轮 Task 7（spec-27 裁决 R4）：pruneOrphanCategories 退场，第二段 describe 为退场断言。
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Miniflare, Log, LogLevel } from 'miniflare';
 import { readFileSync } from 'node:fs';
-import { resolveCategoryShape, categoryShapePairs, pruneOrphanCategories } from '../src/category';
-import { insertSite, upsertCategory, allCategories } from '../src/db';
+import { resolveCategoryShape, categoryShapePairs } from '../src/category';
+import { insertSite, deleteSite, upsertCategory, allCategories } from '../src/db';
+import { buildWebstackYml } from '../src/yml';
+import type { SiteRow, CategoryRow } from '../src/types';
 
 const mf = new Miniflare({ log: new Log(LogLevel.ERROR), modules: true, script: 'export default{}', d1Databases: ['DB'], d1Persist: false });
 let db: any;
@@ -79,28 +82,33 @@ describe('resolveCategoryShape：策略表逐行', () => {
   });
 });
 
-describe('pruneOrphanCategories：删除无站点支撑的 categories 行（term=\'\'  header 行豁免）', () => {
-  it('精确 (taxonomy,term) 无 sites 行 → 删；有 → 留；未分类 空壳（term=\'\'）按新语义豁免保留', async () => {
-    await site('K', '');
-    await site('K', '子K');
-    await upsertCategory(db, { taxonomy: 'K', term: '' });
-    await upsertCategory(db, { taxonomy: 'K', term: '子K' });
-    await upsertCategory(db, { taxonomy: 'K', term: '孤儿' });
-    await upsertCategory(db, { taxonomy: '未分类', term: '' }); // 现存的降级空壳（无站点）
-    await pruneOrphanCategories(db);
-    const cats = await allCategories(db);
-    expect(cats.filter((c: any) => c.taxonomy === 'K').map((c: any) => c.term).sort()).toEqual(['', '子K']);
-    // 控制器裁决：prune 只清非空 term 的孤儿，永不删 term='' 行——header 行承载 icon/顶层排序，删了会丢
-    expect(cats.some((c: any) => c.taxonomy === '未分类')).toBe(true);
+describe('prune 退场（spec-27 裁决 R4）：categories 行是站点删除的旁观者，只增不自动删', () => {
+  it('category 模块不再导出 pruneOrphanCategories（调用点全部撤除后函数本体退场）', async () => {
+    const mod = await import('../src/category');
+    expect('pruneOrphanCategories' in mod).toBe(false);
   });
 
-  it("嵌套分类的 term='' header 行（icon/sort 承载）即使无同名站点行也豁免保留", async () => {
-    await site('NT', '子B'); // sites 侧只有 (NT,子B)，没有任何 term='' 站点行
-    await upsertCategory(db, { taxonomy: 'NT', term: '', icon: 'fas fa-star fa-lg', sort: 7 }); // 旧实现必误删此行
-    await upsertCategory(db, { taxonomy: 'NT', term: '子A' }); // 真孤儿：无 (NT,子A) 站点行
-    await pruneOrphanCategories(db);
-    const cats = (await allCategories(db)).filter((c: any) => c.taxonomy === 'NT');
-    expect(cats.map((c: any) => c.term)).toEqual(['']); // 子A 被删，header 保留
-    expect(cats[0]).toMatchObject({ icon: 'fas fa-star fa-lg', sort: 7 }); // icon/排序未丢
+  it('删掉 pair 的最后一个站点行后 categories 行仍在——非空 term 孤儿与 header 行一视同仁保留', async () => {
+    // 旧语义：无站点支撑的非空 term 行会被 prune 杀掉；R4 后 categories 行升为一等公民（手动新建的空
+    // 分类不得被误杀），原「term=\'\' header 豁免」裁决随 prune 一起失效——因为什么都不自动删了。
+    const s1 = await site('退场', '子K');
+    await upsertCategory(db, { taxonomy: '退场', term: '子K' }); // 有站点支撑的行
+    await upsertCategory(db, { taxonomy: '退场', term: '孤儿' }); // 从未有站点支撑
+    await upsertCategory(db, { taxonomy: '退场', term: '' });     // 旧语义的「豁免」行
+    const s2 = await site('退场', '');
+    await deleteSite(db, s1.id);
+    await deleteSite(db, s2.id);
+    const cats = (await allCategories(db)).filter((c: any) => c.taxonomy === '退场');
+    expect(cats.map((c: any) => c.term).sort()).toEqual(['', '孤儿', '子K'].sort()); // 一行不少
+  });
+
+  it('builder 对空组容忍：某分类站点全删（categories 行俱在）→ buildWebstackYml 不抛、空组无 links', () => {
+    // 空壳分类保留后发布链路必须无害（spec-27 R4 代价条款）：站点行为分组驱动，零站点的分类
+    // 照常输出 taxonomy/icon 骨架但没有任何 links 条目。
+    const rows: SiteRow[] = []; // 纯函数入参：站点侧零行（真实库中更早 describe 沉淀了混用脏态，不适合整库导出）
+    const cats: CategoryRow[] = [{ taxonomy: '空组', term: '', icon: 'fas fa-folder-open fa-lg', sort: 0 }, { taxonomy: '空组', term: '子Q', icon: 'x', sort: 0 }];
+    const text = buildWebstackYml(rows, cats);
+    expect(text).toContain('空组');
+    expect(text).not.toContain('links:');
   });
 });

@@ -160,7 +160,7 @@ describe('/api/admin/sites CRUD', () => {
   });
 });
 
-describe('冒烟修复：PATCH 形态归一 + 孤儿 categories 清理', () => {
+describe('冒烟修复：PATCH 形态归一（Task 7 R4：孤儿清理已退场，行保留+siteCount 可见）', () => {
   it('PATCH：flat 分类塞垃圾 term → 置空；嵌套分类空 term → 未分组（垃圾桶子分类，预期行为）', async () => {
     const flat = (await getJson(await post('/api/admin/sites', { url: 'https://pnflat.test', title: '平', taxonomy: 'PNFLAT' }))).site;
     const nest = (await getJson(await post('/api/admin/sites', { url: 'https://pnnest.test', title: '嵌', taxonomy: 'PNNEST', term: '子甲' }))).site;
@@ -177,30 +177,33 @@ describe('冒烟修复：PATCH 形态归一 + 孤儿 categories 清理', () => {
     expect(p.status).toBe(200);
     expect((await getJson(p)).site).toMatchObject({ taxonomy: 'PNFLAT', term: '' });
   });
-  it('admin DELETE 删掉 (taxonomy,term) 最后一行站点 → categories 对应行消失；term=\'\' 空壳豁免保留', async () => {
+  it('prune 退场（R4）：admin DELETE 删掉 pair 最后一行站点 → categories 行仍在且 siteCount=0；空壳同样保留', async () => {
     const s = (await getJson(await post('/api/admin/sites', { url: 'https://orphan.test', title: '孤', taxonomy: '孤儿测试', term: '子孤' }))).site;
     const cats = (await getJson(await dev.fetch('/api/admin/categories', { headers: auth }))).categories;
-    expect(cats).toContainEqual({ taxonomy: '孤儿测试', term: '子孤', icon: 'fas fa-folder-open fa-lg', sort: 0 });
-    expect((await post('/api/admin/categories', { taxonomy: '空壳类' })).status).toBe(204); // 未知分类放行造空壳
+    expect(cats).toContainEqual({ taxonomy: '孤儿测试', term: '子孤', icon: 'fas fa-folder-open fa-lg', sort: 0, siteCount: 1 });
+    const shell = await post('/api/admin/categories', { taxonomy: '空壳类' }); // 未知分类放行造空壳（Task 7：204→201 {category}）
+    expect(shell.status).toBe(201);
+    expect((await getJson(shell)).category).toMatchObject({ taxonomy: '空壳类', term: '' });
     await dev.fetch(`/api/admin/sites/${s.id}`, { method: 'DELETE', headers: auth });
     const after = (await getJson(await dev.fetch('/api/admin/categories', { headers: auth }))).categories;
-    expect(after.some((c: any) => c.taxonomy === '孤儿测试')).toBe(false);
-    // 控制器裁决：prune 永不删 term='' 行（header 承载 icon/顶层排序），空壳需人工删
-    expect(after.some((c: any) => c.taxonomy === '空壳类')).toBe(true);
+    const row = after.find((c: any) => c.taxonomy === '孤儿测试' && c.term === '子孤');
+    expect(row).toBeDefined(); // 旧断言「行消失」反转：R4 后站点删除不再连带删分类行
+    expect(row.siteCount).toBe(0);
+    expect(after.some((c: any) => c.taxonomy === '空壳类')).toBe(true); // 空壳由分类管理页显式删除
   });
-  it('POST categories 形态守卫：flat 造嵌套行 → 400；嵌套补空 term → 400；新子分类/未知分类放行', async () => {
+  it('POST categories 形态守卫：flat 造嵌套行 → 400；嵌套补空 term → 400；新子分类/未知分类放行（201）', async () => {
     expect((await post('/api/admin/categories', { taxonomy: 'PNFLAT', term: '新子' })).status).toBe(400);
     expect((await post('/api/admin/categories', { taxonomy: 'PNNEST', term: '' })).status).toBe(400);
-    expect((await post('/api/admin/categories', { taxonomy: 'PNNEST', term: '子乙' })).status).toBe(204);
-    expect((await post('/api/admin/categories', { taxonomy: '全新分类999', term: '自带子' })).status).toBe(204);
+    expect((await post('/api/admin/categories', { taxonomy: 'PNNEST', term: '子乙' })).status).toBe(201);
+    expect((await post('/api/admin/categories', { taxonomy: '全新分类999', term: '自带子' })).status).toBe(201);
   });
-  it('reanalyze 成功终点：原 pair 失去全部站点行后 categories 孤儿被 prune', async () => {
+  it('prune 退场（R4）：reanalyze 成功终点不再清孤儿——原 pair 行仍在', async () => {
     const s = (await getJson(await post('/api/admin/sites', { url: 'https://reorph.test', title: '重', taxonomy: '重分析孤测', term: '子R' }))).site;
     const res = await post(`/api/admin/sites/${s.id}/analyze`, {});
     expect(res.status).toBe(200);
     const { site } = await getJson(res); // .test 不可达 → 降级 未分类；原 pair (重分析孤测,子R) 成孤儿
     const cats = (await getJson(await dev.fetch('/api/admin/categories', { headers: auth }))).categories;
-    expect(cats.some((c: any) => c.taxonomy === '重分析孤测')).toBe(false);
+    expect(cats.some((c: any) => c.taxonomy === '重分析孤测')).toBe(true); // 旧断言 false 反转（R4）
     await dev.fetch(`/api/admin/sites/${site.id}`, { method: 'DELETE', headers: auth }); // 清理
   }, 60_000);
 });
@@ -253,27 +256,31 @@ describe('/api/admin/import', () => {
 });
 
 describe('/api/admin/categories', () => {
-  it('POST 补位 → GET 可见（默认 icon）；缺 taxonomy → 400；DELETE 按 (taxonomy,term)', async () => {
-    expect((await post('/api/admin/categories', { taxonomy: 'CT', term: 'ct1' })).status).toBe(204);
-    await post('/api/admin/categories', { taxonomy: 'CT', term: 'ct1', icon: 'should-ignore' });
+  it('POST 补位 → GET 可见（缺 icon 走规则表=默认）；非法 icon 400；缺 taxonomy → 400；DELETE 按 (taxonomy,term)', async () => {
+    const created = await post('/api/admin/categories', { taxonomy: 'CT', term: 'ct1' });
+    expect(created.status).toBe(201); // Task 7：204 → 201 {category}
+    expect((await getJson(created)).category).toMatchObject({ taxonomy: 'CT', term: 'ct1', icon: 'fas fa-folder-open fa-lg', sort: 0 });
+    // Task 7：显式 icon 过 FA_CLASS 闸——非类名字符串不再被补位语义静默忽略，直接 400
+    expect((await post('/api/admin/categories', { taxonomy: 'CT', term: 'ct1', icon: 'should-ignore' })).status).toBe(400);
     const cats = (await getJson(await dev.fetch('/api/admin/categories', { headers: auth }))).categories;
-    expect(cats).toContainEqual({ taxonomy: 'CT', term: 'ct1', icon: 'fas fa-folder-open fa-lg', sort: 0 });
+    expect(cats).toContainEqual({ taxonomy: 'CT', term: 'ct1', icon: 'fas fa-folder-open fa-lg', sort: 0, siteCount: 0 });
     expect((await post('/api/admin/categories', { term: 'x' })).status).toBe(400);
     expect((await dev.fetch('/api/admin/categories?taxonomy=CT&term=ct1', { method: 'DELETE', headers: auth })).status).toBe(204);
     const after = (await getJson(await dev.fetch('/api/admin/categories', { headers: auth }))).categories;
     expect(after.some((c: { taxonomy: string }) => c.taxonomy === 'CT')).toBe(false);
   });
   it('冒烟修复：GET 返回 shapes（union 形态视图，数据源同 resolve；categories 字段向后兼容）', async () => {
-    // 借用前序用例沉淀的真实形态：PNFLAT=flat（两源均 ''行）、PNNEST=嵌套（站点 term 未分组，孤儿 cat 已被 prune）
+    // 借用前序用例沉淀的真实形态：PNFLAT=flat（两源均 ''行）、PNNEST=嵌套。
+    // Task 7（R4）：孤儿不再被 prune——categories 侧 子甲/子乙 行沉淀在表内，union 取证一并可见。
     const body = await getJson(await dev.fetch('/api/admin/categories', { headers: auth }));
-    expect(Array.isArray(body.categories)).toBe(true); // 原字段不动（向后兼容）
+    expect(Array.isArray(body.categories)).toBe(true); // 原字段不动（向后兼容，行新增 siteCount 键）
     const shapes = body.shapes;
     expect(Array.isArray(shapes)).toBe(true);
     const flat = shapes.find((s: any) => s.taxonomy === 'PNFLAT');
     expect(flat).toMatchObject({ nested: false, terms: [] });
     const nest = shapes.find((s: any) => s.taxonomy === 'PNNEST');
     expect(nest.nested).toBe(true);
-    expect(nest.terms).toEqual(['未分组']); // union 取证：即便 categories 表孤儿行被清，站点行仍证明嵌套形态
+    expect(nest.terms).toEqual(['子乙', '子甲', '未分组']); // categories(子甲/子乙) ∪ sites(未分组)，sort() 按码位序
     // 每个 shape 的 taxonomy 必须非空且互不重复
     expect(shapes.every((s: any) => s.taxonomy !== '')).toBe(true);
     expect(new Set(shapes.map((s: any) => s.taxonomy)).size).toBe(shapes.length);
@@ -527,6 +534,157 @@ describe('/api/admin/navitems', () => {
   });
 });
 
+// ── Task 7：/api/admin/categories 一等公民进化（spec-27 §3.3/§5.3 + R4）：siteCount/改名级联/非空禁删/原子批删 ──
+describe('categories 管理（Task 7）', () => {
+  const catRow = async (taxonomy: string, term: string) =>
+    ((await getJson(await dev.fetch('/api/admin/categories', { headers: auth }))).categories as any[])
+      .find((c) => c.taxonomy === taxonomy && c.term === term);
+  const patchCat = (body: unknown) =>
+    dev.fetch('/api/admin/categories', { method: 'PATCH', headers: authJson, body: JSON.stringify(body) });
+  const deleteCat = (taxonomy: string, term = '') =>
+    dev.fetch(`/api/admin/categories?taxonomy=${encodeURIComponent(taxonomy)}&term=${encodeURIComponent(term)}`, { method: 'DELETE', headers: auth });
+  // 直通造数（title+taxonomy 同给零网络）：pipeline 顺带补 categories 行
+  const mk = async (url: string, taxonomy: string, term?: string) =>
+    (await getJson(await post('/api/admin/sites', { url, title: 'T', taxonomy, ...(term ? { term } : {}) }))).site as { id: number };
+
+  it('GET：每行附 siteCount（pair 精确计数，任意 status——pending 也计入）；shapes 原样在', async () => {
+    await mk('https://c7count-a.test', 'C7数类', '子一');
+    await mk('https://c7count-b.test', 'C7数类', '子一');
+    await mk('https://c7count-c.test', 'C7数类', '子二'); // 同 taxonomy 不同 pair 各自计数
+    expect((await catRow('C7数类', '子一')).siteCount).toBe(2);
+    expect((await catRow('C7数类', '子二')).siteCount).toBe(1);
+    const body = await getJson(await dev.fetch('/api/admin/categories', { headers: auth }));
+    expect(Array.isArray(body.shapes)).toBe(true); // 原字段不动（向后兼容）
+    expect(body.shapes.some((s: any) => s.taxonomy === 'C7数类' && s.nested && s.terms.includes('子一'))).toBe(true);
+  });
+
+  it('POST：显式 icon 合法 → 201 回显 icon/sort；缺 icon 且无 AI 配置 → 规则表（游戏→fa-gamepad，零网络）；非法 icon → 400 零写入', async () => {
+    const withIcon = await post('/api/admin/categories', { taxonomy: 'C7指定', term: '子a', icon: 'fas fa-wrench fa-lg', sort: 9 });
+    expect(withIcon.status).toBe(201);
+    expect((await getJson(withIcon)).category).toMatchObject({ taxonomy: 'C7指定', term: '子a', icon: 'fas fa-wrench fa-lg', sort: 9 });
+    const auto = await post('/api/admin/categories', { taxonomy: 'C7游戏' }); // wrangler vars 无 AI_* → resolveIcon 落规则表（直通零网络纪律）
+    expect(auto.status).toBe(201);
+    expect((await getJson(auto)).category).toMatchObject({ taxonomy: 'C7游戏', term: '', icon: 'fas fa-gamepad', sort: 0 });
+    const bad = await post('/api/admin/categories', { taxonomy: 'C7坏图标', icon: 'javascript:alert(1)' });
+    expect(bad.status).toBe(400);
+    expect(await getJson(bad)).toMatchObject({ error: 'bad_request' });
+    expect(await catRow('C7坏图标', '')).toBeUndefined(); // 拒绝路径零落库
+    // 补位语义保留：已存在 pair 上送合法 icon 也不覆盖（人工管理优先），响应回显既有行
+    const again = await post('/api/admin/categories', { taxonomy: 'C7指定', term: '子a', icon: 'fas fa-star' });
+    expect(again.status).toBe(201);
+    expect((await getJson(again)).category).toMatchObject({ icon: 'fas fa-wrench fa-lg', sort: 9 });
+  });
+
+  it('PATCH 改 taxonomy：header 整类级联（categories header+子行、sites 全改）；目标撞名（union 已有）→ 400 不隐式合并；只改 icon/sort → 仅动 categories；源行缺 → 404', async () => {
+    const s = await mk('https://c7ren.test', 'C7旧类', '子一'); // pipeline 补行 (C7旧类,子一)
+    await post('/api/admin/categories', { taxonomy: 'C7旧类', term: '子二' }); // 嵌套形态放行加子行
+    const toHeader = await patchCat({ taxonomy: 'C7旧类', term: '子二', new: { term: '' } }); // 子二升格为 header 行
+    expect(toHeader.status).toBe(200);
+    expect((await getJson(toHeader)).category).toMatchObject({ taxonomy: 'C7旧类', term: '' });
+    const r = await patchCat({ taxonomy: 'C7旧类', term: '', new: { taxonomy: 'C7新类' } });
+    expect(r.status).toBe(200);
+    expect((await getJson(r)).category).toMatchObject({ taxonomy: 'C7新类', term: '' });
+    expect(await catRow('C7旧类', '')).toBeUndefined();
+    expect(await catRow('C7旧类', '子一')).toBeUndefined();
+    expect((await catRow('C7新类', '子一')).siteCount).toBe(1); // 子行连带改名且站点计数跟随
+    const sites = await getJson(await dev.fetch(`/api/admin/sites?taxonomy=${encodeURIComponent('C7新类')}`, { headers: auth }));
+    expect(sites.total).toBe(1);
+    expect(sites.sites[0].id).toBe(s.id); // 同一站点行被 UPDATE 跟随（非删重插）
+    // 目标撞名：C7衝突 在 union 已有行 → 整类改名 400（不提供隐式合并）
+    await post('/api/admin/categories', { taxonomy: 'C7衝突' });
+    const collide = await patchCat({ taxonomy: 'C7新类', term: '', new: { taxonomy: 'C7衝突' } });
+    expect(collide.status).toBe(400);
+    expect((await getJson(collide)).message).toContain('C7衝突');
+    expect(await catRow('C7新类', '子一')).toBeDefined(); // 拒绝零写入
+    // 只改 icon/sort：仅动目标 categories 行
+    const before = JSON.stringify(await getJson(await dev.fetch(`/api/admin/sites?taxonomy=${encodeURIComponent('C7新类')}`, { headers: auth })));
+    const only = await patchCat({ taxonomy: 'C7新类', term: '子一', new: { icon: 'fas fa-book-open', sort: 4 } });
+    expect(only.status).toBe(200);
+    expect((await getJson(only)).category).toMatchObject({ taxonomy: 'C7新类', term: '子一', icon: 'fas fa-book-open', sort: 4 });
+    expect((await catRow('C7新类', '')).icon).not.toBe('fas fa-book-open'); // header 行未被连带
+    expect(JSON.stringify(await getJson(await dev.fetch(`/api/admin/sites?taxonomy=${encodeURIComponent('C7新类')}`, { headers: auth })))).toBe(before);
+    // 非法 icon 400；源行不存在 404；缺 taxonomy 400
+    expect((await patchCat({ taxonomy: 'C7新类', term: '', new: { icon: 'run(evil)' } })).status).toBe(400);
+    expect((await patchCat({ taxonomy: 'C7新类', term: '', new: { taxonomy: '  ' } })).status).toBe(400); // 空目标名不得落库（毒化 shapes）
+    const nf = await patchCat({ taxonomy: 'C7无此', term: '', new: { icon: 'fas fa-star' } });
+    expect(nf.status).toBe(404);
+    expect(await getJson(nf)).toMatchObject({ error: 'bad_request' });
+    expect((await patchCat({ term: '', new: {} })).status).toBe(400);
+  });
+
+  it('PATCH 改 term：(tax,子甲)→子乙 连带 sites 跟随；目标 (tax,子乙) 已存在 → 400', async () => {
+    await mk('https://c7term.test', 'C7多子', '子甲');
+    const r = await patchCat({ taxonomy: 'C7多子', term: '子甲', new: { term: '子乙' } });
+    expect(r.status).toBe(200);
+    expect((await getJson(r)).category).toMatchObject({ taxonomy: 'C7多子', term: '子乙' });
+    expect(await catRow('C7多子', '子甲')).toBeUndefined();
+    expect((await catRow('C7多子', '子乙')).siteCount).toBe(1); // 站点行 term 跟随
+    const sites = await getJson(await dev.fetch(`/api/admin/sites?taxonomy=${encodeURIComponent('C7多子')}&term=${encodeURIComponent('子乙')}`, { headers: auth }));
+    expect(sites.total).toBe(1);
+    await post('/api/admin/categories', { taxonomy: 'C7多子', term: '子丙' });
+    const collide = await patchCat({ taxonomy: 'C7多子', term: '子丙', new: { term: '子乙' } });
+    expect(collide.status).toBe(400);
+    expect((await getJson(collide)).message).toContain('子乙');
+  });
+
+  it('DELETE 守卫：非空 pair → 400（message 含条数）；空 pair term 行 → 204；header：该 taxonomy 有任意站点 → 400，零站点 → 204 且子分类行连带消失', async () => {
+    await mk('https://c7del-a.test', 'C7删除', '子甲');
+    await mk('https://c7del-b.test', 'C7删除', '子甲');
+    const blocked = await deleteCat('C7删除', '子甲');
+    expect(blocked.status).toBe(400);
+    expect((await getJson(blocked)).message).toContain('2'); // 条数进 message
+    expect(await catRow('C7删除', '子甲')).toBeDefined(); // 拒绝零写入
+    await post('/api/admin/categories', { taxonomy: 'C7删除', term: '子乙' }); // 空 pair 行
+    expect((await deleteCat('C7删除', '子乙')).status).toBe(204);
+    expect(await catRow('C7删除', '子乙')).toBeUndefined();
+    // header 删除（term=''）= 整类删：C7删除 仍有站点 → 400
+    expect((await deleteCat('C7删除')).status).toBe(400);
+    // 清空站点后整类删：仅剩空壳 子甲 行，连带消失
+    const left = await getJson(await dev.fetch(`/api/admin/sites?taxonomy=${encodeURIComponent('C7删除')}`, { headers: auth }));
+    for (const r of left.sites) await dev.fetch(`/api/admin/sites/${r.id}`, { method: 'DELETE', headers: auth });
+    expect((await deleteCat('C7删除')).status).toBe(204);
+    const cats = (await getJson(await dev.fetch('/api/admin/categories', { headers: auth }))).categories as any[];
+    expect(cats.some((c) => c.taxonomy === 'C7删除')).toBe(false);
+  });
+
+  it('batch-delete 原子：任一 pair 非空 → 400 列全阻塞且零删除；全空 → 200 {deleted:n}；header 按 taxonomy 全量口径；参数校验 400', async () => {
+    const s = await mk('https://c7bd-a.test', 'C7批非空', '子一');
+    await post('/api/admin/categories', { taxonomy: 'C7批空', term: '子一' });
+    const before = ((await getJson(await dev.fetch('/api/admin/categories', { headers: auth }))).categories as any[]).length;
+    const reject = await post('/api/admin/categories/batch-delete', { pairs: [{ taxonomy: 'C7批非空', term: '子一' }, { taxonomy: 'C7批空', term: '子一' }] });
+    expect(reject.status).toBe(400);
+    expect((await getJson(reject)).message).toContain('C7批非空');
+    expect(((await getJson(await dev.fetch('/api/admin/categories', { headers: auth }))).categories as any[]).length).toBe(before); // 零写
+    await dev.fetch(`/api/admin/sites/${s.id}`, { method: 'DELETE', headers: auth }); // 掏空 → 再批删全空
+    const ok = await post('/api/admin/categories/batch-delete', { pairs: [{ taxonomy: 'C7批非空', term: '子一' }, { taxonomy: 'C7批空', term: '子一' }] });
+    expect(ok.status).toBe(200);
+    expect(await getJson(ok)).toEqual({ deleted: 2 });
+    // header pair（term=''）按 countSitesByTaxonomy 口径：taxonomy 下有站点即阻塞
+    const s2 = await mk('https://c7bd-b.test', 'C7批壳'); // (C7批壳,'') 行 + 1 站点
+    const hdr = await post('/api/admin/categories/batch-delete', { pairs: [{ taxonomy: 'C7批壳', term: '' }] });
+    expect(hdr.status).toBe(400);
+    expect((await getJson(hdr)).message).toContain('C7批壳');
+    await dev.fetch(`/api/admin/sites/${s2.id}`, { method: 'DELETE', headers: auth });
+    expect(await getJson(await post('/api/admin/categories/batch-delete', { pairs: [{ taxonomy: 'C7批壳' }] }))).toEqual({ deleted: 1 });
+    // 参数校验
+    expect((await post('/api/admin/categories/batch-delete', { pairs: [] })).status).toBe(400);
+    expect((await post('/api/admin/categories/batch-delete', {})).status).toBe(400);
+    expect((await post('/api/admin/categories/batch-delete', { pairs: [{ term: 'x' }] })).status).toBe(400);
+    expect((await post('/api/admin/categories/batch-delete', { pairs: 'nope' })).status).toBe(400);
+    expect((await dev.fetch('/api/admin/categories/batch-delete', { headers: auth })).status).toBe(400); // GET → 方法不支持兜底（Task 4 约定）
+  });
+
+  it('prune 退场（R4）：站点删除后空壳分类行可见、可显式删（一等公民闭环）', async () => {
+    const s = await mk('https://c7zombie.test', 'C7残骸', '殁');
+    expect((await catRow('C7残骸', '殁')).siteCount).toBe(1);
+    await dev.fetch(`/api/admin/sites/${s.id}`, { method: 'DELETE', headers: auth });
+    const row = await catRow('C7残骸', '殁');
+    expect(row).toBeDefined();
+    expect(row.siteCount).toBe(0);
+    expect((await deleteCat('C7残骸', '殁')).status).toBe(204); // 空 pair 由分类管理页显式删除
+  });
+});
+
 // ── 单元级：reanalyze 抛异常回滚 + 顶层错误外壳 ──
 // 集成环境（unstable_dev）里流水线没有自然抛异常的路径：.invalid 抓取走降级返回（ok:false）而非 throw，
 // 也无法在「删除之后」注入 D1 故障——故直接调用 handleAdmin，用按 SQL 前缀分派的 D1 假件驱动该分支。
@@ -556,8 +714,7 @@ const makeStubDb = (restoreConflict: boolean) => {
         },
         run: async () => {
           if (sql.startsWith('DELETE FROM sites')) { calls.push('delete'); return {}; }
-          if (sql.startsWith('DELETE FROM categories')) { calls.push('prune'); return {}; } // reanalyze 失败回滚后同样 prune（brief：restore 回滚路径别忘了）
-          throw unexpected(sql);
+          throw unexpected(sql); // Task 7（R4）：prune 退场后回滚路径不再有 'DELETE FROM categories'——若复现即 unknown SQL 炸出
         },
         all: async () => {
           if (sql.startsWith('SELECT * FROM categories')) { calls.push('boom'); throw new Error('D1_ERROR: 模拟流水线中段 D1 故障'); }
@@ -587,14 +744,14 @@ describe('reanalyze 异常回滚与错误外壳（单元级）', () => {
     const res = await analyze(db);
     expect(res.status).toBe(502);
     expect(await getJson(res)).toMatchObject({ error: 'fetch_failed' });
-    expect(calls).toEqual(['get', 'delete', 'dupcheck', 'boom', 'restore', 'prune']); // 删除后异常 → 回滚插入发生 → 回滚后 prune
+    expect(calls).toEqual(['get', 'delete', 'dupcheck', 'boom', 'restore']); // 删除后异常 → 回滚插入发生（R4：回滚后不再 prune）
   });
   it('回滚插入自身 UNIQUE 冲突 → 不再抛出，仍返回 502 统一信封', async () => {
     const { calls, db } = makeStubDb(true);
     const res = await analyze(db);
     expect(res.status).toBe(502);
     expect(await getJson(res)).toMatchObject({ error: 'fetch_failed' });
-    expect(calls).toEqual(['get', 'delete', 'dupcheck', 'boom', 'restore', 'prune']);
+    expect(calls).toEqual(['get', 'delete', 'dupcheck', 'boom', 'restore']);
   });
   it('路由体内无兜底位置抛异常 → 错误外壳产出 500 JSON {error:fetch_failed}（而非 Cloudflare 纯文本）', async () => {
     const brokenDb = { prepare: () => { throw new Error('D1 完全不可用'); } } as unknown as D1Database;

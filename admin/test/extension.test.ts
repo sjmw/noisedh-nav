@@ -217,16 +217,17 @@ describe('DELETE /api/delete（Bearer）', () => {
     const res = await dev.fetch('/api/delete', { method: 'DELETE', headers: authJson, body: JSON.stringify({ filename: 'webstack.yml', title: '查无此题', kind: 'webstack' }) });
     expect(res.status).toBe(204);
   });
-  it('冒烟修复：扩展 DELETE 删除成功后清理孤儿 categories（防「删了站还卡发布」复发）', async () => {
+  it('prune 退场（R4）：扩展 DELETE 删站成功后 categories 行不随站点消失（仍在、siteCount=0）', async () => {
     await mkSite('https://extprune.test', { title: '删后孤测', taxonomy: 'EXTPRUNE', term: '子删' });
-    const hasOrphan = async () => {
-      const cats = (await jf(await dev.fetch('/api/admin/categories', { headers: auth }))).categories;
-      return cats.some((c: any) => c.taxonomy === 'EXTPRUNE');
-    };
-    expect(await hasOrphan()).toBe(true);
+    const orphanRow = async () =>
+      ((await jf(await dev.fetch('/api/admin/categories', { headers: auth }))).categories as any[])
+        .find((c: any) => c.taxonomy === 'EXTPRUNE' && c.term === '子删');
+    expect((await orphanRow()).siteCount).toBe(1);
     const res = await dev.fetch('/api/delete', { method: 'DELETE', headers: authJson, body: JSON.stringify({ filename: 'webstack.yml', title: '删后孤测', kind: 'webstack' }) });
     expect(res.status).toBe(204);
-    expect(await hasOrphan()).toBe(false); // (EXTPRUNE,子删) 失去唯一站点行 → categories 孤儿被 prune
+    const row = await orphanRow();
+    expect(row).toBeDefined(); // 旧断言「孤儿被 prune」反转：R4 后由分类管理页显式删除
+    expect(row.siteCount).toBe(0);
   });
 });
 

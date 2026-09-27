@@ -6,7 +6,7 @@
 
 import { analyzeAndUpsert } from './pipeline';
 import { normalizeUrl } from './url';
-import { resolveCategoryShape, pruneOrphanCategories } from './category';
+import { resolveCategoryShape } from './category';
 import { buildWebstackYml } from './yml';
 import { ghGet } from './github';
 import { jsonError, errStatus, readJsonBody } from './errors';
@@ -151,7 +151,7 @@ async function route(req: Request, u: URL, env: Env, deps: { fetchImpl?: typeof 
     const row = await findOldestSiteByTitle(db, body.title);
     if (row) {
       await deleteSite(db, row.id);
-      await pruneOrphanCategories(db); // 删除成功后孤儿清理（防「删了站还卡发布」复发）
+      // R4（spec-27）：删除后不再 prune——失去站点支撑的 categories 行保留（一等公民），由分类管理页显式删除
     }
     return new Response(null, { status: 204 });
   }

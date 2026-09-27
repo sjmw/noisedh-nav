@@ -109,6 +109,11 @@ export async function deleteCategory(db: D1Database, taxonomy: string, term: str
   await db.prepare('DELETE FROM categories WHERE taxonomy = ? AND term = ?').bind(taxonomy, term).run();
 }
 
+// 双键定位读单行（Task 7：POST/PATCH 响应回显 {category}）
+export async function getCategory(db: D1Database, taxonomy: string, term: string): Promise<CategoryRow | null> {
+  return (await db.prepare('SELECT * FROM categories WHERE taxonomy = ? AND term = ?').bind(taxonomy, term).first<CategoryRow>()) ?? null;
+}
+
 // ── 管理扩展轮（spec-27）：friendlinks / navitems / 批量删 / 分类级联改名 ──
 export async function allFriendlinks(db: D1Database): Promise<FriendlinkRow[]> {
   const { results } = await db.prepare('SELECT * FROM friendlinks ORDER BY sort, id').all<FriendlinkRow>();
