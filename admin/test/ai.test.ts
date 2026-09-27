@@ -4,7 +4,7 @@ import { aiAnalyze, type AiResult } from '../src/ai';
 
 const env = { AI_BASE_URL: 'https://x/v1', AI_API_KEY: 'k', AI_MODEL: 'm' } as any;
 const fakeFetch = (body: unknown) => (async () => new Response(JSON.stringify(body))) as unknown as typeof fetch;
-const input = { url: 'https://cg99.com', pageText: 'CG 设计资源站', baselineTitle: 'CG99', categories: ['媒体创作'] };
+const input = { url: 'https://cg99.com', pageText: 'CG 设计资源站', baselineTitle: 'CG99', categories: ['媒体创作'], subcategories: { 媒体创作: ['素材'] } };
 
 // fixtures 为活测试数据：ok=合规定级载荷 / bad-json=content 非 JSON / unknown-taxonomy=分类不在列表且 new_category=false
 const fixture = (name: string) => JSON.parse(readFileSync(`test/fixtures/ai/${name}.json`, 'utf8'));
@@ -90,6 +90,21 @@ describe('aiAnalyze', () => {
     expect(body.messages[0].content).toContain('媒体创作'); // categories 注入 system
     expect(body.messages[1].content).toContain('https://cg99.com');
     expect(init!.signal).toBeInstanceOf(AbortSignal);
+  });
+  it('system prompt 升级：taxonomy 必须非空 + 子分类清单给出 + 嵌套分类 term 必须给（AI 改造）', async () => {
+    const fake = vi.fn(async (_u: string | URL, _init?: RequestInit) => new Response(JSON.stringify(fixture('ok'))));
+    await aiAnalyze(
+      { ...input, categories: ['媒体创作', '常用推荐'], subcategories: { 媒体创作: ['素材', '剪辑'], 常用推荐: [] } },
+      env,
+      fake as unknown as typeof fetch,
+    );
+    const sys = JSON.parse(fake.mock.calls[0]![1]!.body as string).messages[0].content as string;
+    expect(sys).toContain('素材、剪辑'); // 子分类清单随分类给出（flat 分类不在清单=空即平铺语义）
+    expect(sys).not.toContain('常用推荐：'); // 空清单不产出「分类：」行
+    expect(sys).toContain('term 必须'); // 带子分类结构的分类 term 必须给（已有或新增名）
+    expect(sys).toContain('必须给出且非空'); // taxonomy 强制
+    expect(sys).toContain('new_category'); // 新分类出口保留
+    expect(sys).toContain('仅输出 JSON'); // 输出形状不变（validate 不动的依据）
   });
   it('任一 env 字段缺失 → null 且不发请求', async () => {
     for (const partial of [

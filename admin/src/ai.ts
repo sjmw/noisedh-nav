@@ -16,6 +16,9 @@ export interface AiInput {
   pageText: string;
   baselineTitle: string;
   categories: string[];
+  // 冒烟修复轮（AI 改造）：taxonomy→非空 term 清单（来源=categories∪sites union，由 pipeline 传入）。
+  // validate 仍只按 categories 精确匹配（不动）；本字段仅进 systemPrompt 供 AI 选term。
+  subcategories: Record<string, string[]>;
 }
 
 const TIMEOUT_MS = 20000; // AI 生成比抓页慢，单独放宽
@@ -24,10 +27,22 @@ const MAX_PAGE_TEXT = 3000; // user 消息截断，控制 token
 const TITLE_MAX = 30; // 「≤30字」：超限整条降级 null（不半采信），按码点计数
 const DESC_MAX = 40;
 
-const systemPrompt = (categories: string[]): string =>
-  `你是网站收录分析助手。仅输出 JSON，不要输出任何其他文字。字段：` +
-  `title(≤30字,去站点后缀)、description(≤40字,中文,概括网站做什么)、taxonomy、term(可为空串)、new_category(布尔)。` +
-  `分类必须优先从给定列表中选择：${categories.join('、')}`;
+const systemPrompt = (categories: string[], subcategories: Record<string, string[]>): string => {
+  // 只列有子分类的 taxonomy：flat/无清单的分类不进表（prompt 中「不在表里→term 空串」即平铺语义）
+  const subLines = Object.entries(subcategories)
+    .filter(([, terms]) => terms.length > 0)
+    .map(([tax, terms]) => `${tax}：${terms.join('、')}`)
+    .join('\n');
+  return (
+    `你是网站收录分析助手。仅输出 JSON，不要输出任何其他文字。字段：` +
+    `title(≤30字,去站点后缀)、description(≤40字,中文,概括网站做什么)、taxonomy、term(可为空串)、new_category(布尔)。` +
+    `taxonomy 必须给出且非空：优先从给定分类列表中选择：${categories.join('、')}；` +
+    `列表没有合适的→提议一个简短新分类名并置 new_category=true。` +
+    (subLines !== '' ? `以下分类带子分类结构（分类：子分类清单）：\n${subLines}\n` : '') +
+    `所选分类在上述清单中时，term 必须给出：优先从该分类子分类中选一个，都不合适就提一个简短新子分类名；` +
+    `不在清单中（平铺/无子分类）的分类 term 给空串。`
+  );
+};
 
 const userPrompt = (input: AiInput): string =>
   `URL：${input.url}\n原标题：${input.baselineTitle}\n页面正文摘要：${input.pageText.slice(0, MAX_PAGE_TEXT)}`;
@@ -65,7 +80,7 @@ export async function aiAnalyze(
           temperature: 0,
           response_format: { type: 'json_object' },
           messages: [
-            { role: 'system', content: systemPrompt(input.categories) },
+            { role: 'system', content: systemPrompt(input.categories, input.subcategories) },
             { role: 'user', content: userPrompt(input) },
           ],
         }),
