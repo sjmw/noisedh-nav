@@ -247,6 +247,21 @@ describe('/api/admin/categories', () => {
     const after = (await getJson(await dev.fetch('/api/admin/categories', { headers: auth }))).categories;
     expect(after.some((c: { taxonomy: string }) => c.taxonomy === 'CT')).toBe(false);
   });
+  it('冒烟修复：GET 返回 shapes（union 形态视图，数据源同 resolve；categories 字段向后兼容）', async () => {
+    // 借用前序用例沉淀的真实形态：PNFLAT=flat（两源均 ''行）、PNNEST=嵌套（站点 term 未分组，孤儿 cat 已被 prune）
+    const body = await getJson(await dev.fetch('/api/admin/categories', { headers: auth }));
+    expect(Array.isArray(body.categories)).toBe(true); // 原字段不动（向后兼容）
+    const shapes = body.shapes;
+    expect(Array.isArray(shapes)).toBe(true);
+    const flat = shapes.find((s: any) => s.taxonomy === 'PNFLAT');
+    expect(flat).toMatchObject({ nested: false, terms: [] });
+    const nest = shapes.find((s: any) => s.taxonomy === 'PNNEST');
+    expect(nest.nested).toBe(true);
+    expect(nest.terms).toEqual(['未分组']); // union 取证：即便 categories 表孤儿行被清，站点行仍证明嵌套形态
+    // 每个 shape 的 taxonomy 必须非空且互不重复
+    expect(shapes.every((s: any) => s.taxonomy !== '')).toBe(true);
+    expect(new Set(shapes.map((s: any) => s.taxonomy)).size).toBe(shapes.length);
+  });
 });
 
 describe('publish 路由与未知路径', () => {

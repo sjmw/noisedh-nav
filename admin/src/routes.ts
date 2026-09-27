@@ -155,7 +155,21 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
 
   // ── categories ──
   if (p === '/api/admin/categories') {
-    if (req.method === 'GET') return json({ categories: await allCategories(db) });
+    if (req.method === 'GET') {
+      // shapes：union（categories∪sites）形态视图，供后台分类/子分类选择器联动；
+      // 数据源与 resolveCategoryShape 一致（同 taxonomy 同 nested 判定），原 categories 字段不动（向后兼容）。
+      const pairs = await categoryShapePairs(db);
+      const termsOf = new Map<string, string[]>();
+      for (const x of pairs) {
+        const arr = termsOf.get(x.taxonomy) ?? [];
+        termsOf.set(x.taxonomy, arr);
+        if (x.term !== '' && !arr.includes(x.term)) arr.push(x.term);
+      }
+      const shapes = [...termsOf.entries()]
+        .map(([taxonomy, terms]) => ({ taxonomy, nested: terms.length > 0, terms: [...terms].sort() }))
+        .sort((a, b) => a.taxonomy.localeCompare(b.taxonomy));
+      return json({ categories: await allCategories(db), shapes });
+    }
     if (req.method === 'POST') {
       const body = await readJsonBody(req);
       if (!body || typeof body.taxonomy !== 'string' || body.taxonomy.trim() === '') return fail('bad_request', '需要 {taxonomy:string,...}');

@@ -71,6 +71,7 @@ function showView(name) {
   for (const b of tabs.querySelectorAll('button')) b.classList.toggle('on', b.dataset.view === name);
   for (const s of document.querySelectorAll('main section')) s.classList.toggle('hidden', s.id !== 'view-' + name);
   if (name === 'list') { loadList(); loadTaxonomies(); }
+  if (name === 'add') loadTaxonomies(); // 保证新增视图的分类建议不依赖「先去列表」顺序
 }
 tabs.addEventListener('click', (e) => {
   const v = e.target && e.target.dataset && e.target.dataset.view;
@@ -100,14 +101,53 @@ $('token-clear').addEventListener('click', () => { setToken(''); applyAuthedUi(f
 /* ---------- 列表视图 ---------- */
 const listState = { q: '', status: '', taxonomy: '', page: 1, perPage: 50, total: 0, sites: [] };
 
+/* ---------- 分类形态缓存与选择器（冒烟修复轮：后台分类/子分类改 datalist 联动） ----------
+ * 数据源 = GET categories 的 shapes 字段（categories∪sites union 形态视图，与后端
+ * resolveCategoryShape 同一取证口径）。后端已对四个写入口做形态归一，前端只负责「给对建议」，
+ * 提交逻辑不变（flat 分类填了子分类也会被后端静默置空，前端用 placeholder 明示规则）。 */
+const shapeState = { shapes: [] };
+// 旧服务端/旧响应缺 shapes 时降级为空清单：datalist 无建议、输入仍自由（后端兜底）。
+const shapeOf = (tax) => shapeState.shapes.find((s) => s.taxonomy === tax.trim()) || null;
+
+function fillTaxonomyDatalist(dl) {
+  dl.replaceChildren();
+  for (const t of [...new Set(shapeState.shapes.map((s) => s.taxonomy))].sort()) dl.append(new Option(t, t));
+}
+
+// term 的 datalist 随当前 taxonomy 输入联动；返回 sync 供外部（数据刷新后）主动重算
+function bindTermLink(taxInput, termInput, dl) {
+  const sync = () => {
+    const shape = shapeOf(taxInput.value);
+    dl.replaceChildren();
+    if (shape && shape.nested) {
+      for (const t of shape.terms) dl.append(new Option(t, t));
+      termInput.placeholder = '子分类（选已有或输入新子分类名）';
+    } else if (shape) {
+      termInput.placeholder = '平铺分类：子分类留空即可（填了会被丢弃）';
+    } else {
+      termInput.placeholder = taxInput.value.trim() ? '新分类：可直接起子分类名' : '子分类（可选）';
+    }
+  };
+  taxInput.addEventListener('input', sync);
+  sync();
+  return sync;
+}
+
+let addTermSync = null; // 新增视图的联动句柄（loadTaxonomies 刷新数据后重算建议）
+
 async function loadTaxonomies() {
   try {
-    const { categories } = await api('categories');
+    const { categories, shapes } = await api('categories');
+    shapeState.shapes = Array.isArray(shapes) ? shapes : [];
     const sel = $('f-taxonomy');
     const cur = sel.value;
     sel.replaceChildren(new Option('全部分类', ''));
-    for (const t of [...new Set(categories.map((c) => c.taxonomy))].sort()) sel.append(new Option(t, t));
+    // 筛选项取 union 全集（shapes 覆盖「有站点行但 categories 表无行」的分类），无 shapes 时回退 categories
+    const taxes = shapes && shapes.length ? shapes.map((s) => s.taxonomy) : categories.map((c) => c.taxonomy);
+    for (const t of [...new Set(taxes)].sort()) sel.append(new Option(t, t));
     if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
+    fillTaxonomyDatalist($('dl-taxonomy'));
+    if (addTermSync) addTermSync();
   } catch { /* 401 已由 api() 处理，其余静默（筛选器缺分类不致命） */ }
 }
 
@@ -158,20 +198,27 @@ function fieldInput(type, value, ph) {
 function buildRow(site) {
   const tr = document.createElement('tr');
   tr.dataset.id = String(site.id);
-  const td = (node) => { const c = el('td'); c.append(node); tr.append(c); return c; };
+  const td = (...nodes) => { const c = el('td'); c.append(...nodes); tr.append(c); return c; };
   td(el('span', 'dim', site.id));
   // 展示口径（Task 9/10 裁定）：url_raw || url —— 原样 URL 保真，编辑后仍显示用户输入形态
   const inUrl = fieldInput('text', site.url_raw || site.url, 'https://…');
   const inTitle = fieldInput('text', site.title);
   const inDesc = fieldInput('text', site.description);
   const inLogo = fieldInput('text', site.logo, '文件名或 URL');
+  // 分类/子分类：input + datalist 联动（taxonomy 共享全局清单；term 每行独立 datalist，
+  // 多行并行编辑时各行建议跟随本行分类输入）。datalist 放在行内，随行销毁不残留。
   const inTax = fieldInput('text', site.taxonomy);
+  inTax.setAttribute('list', 'dl-taxonomy');
   const inTerm = fieldInput('text', site.term);
+  const dlTerm = el('datalist');
+  dlTerm.id = 'dl-term-row-' + site.id;
+  inTerm.setAttribute('list', dlTerm.id);
+  bindTermLink(inTax, inTerm, dlTerm);
   const inStatus = el('select');
   inStatus.append(new Option('待发布 pending', 'pending'), new Option('已发布 published', 'published'));
   inStatus.value = site.status;
   const inSort = fieldInput('number', site.sort); inSort.style.width = '5rem';
-  td(inUrl); td(inTitle); td(inDesc); td(inLogo); td(inTax); td(inTerm); td(inStatus); td(inSort);
+  td(inUrl); td(inTitle); td(inDesc); td(inLogo); td(inTax); td(inTerm, dlTerm); td(inStatus); td(inSort);
   td(el('span', 'dim', site.source));
 
   const ops = el('div', 'row-ops');
@@ -350,9 +397,16 @@ async function addSite() {
   const btn = $('add-go'); btn.disabled = true;
   $('add-result').replaceChildren();
   try {
-    // 服务端 analyzeAndUpsert 已完成抓取+分析（未配 AI/抓取失败 → 降级 pending 行），UI 只展示结果行
-    const { site } = await api('sites', { method: 'POST', body: JSON.stringify({ url }) });
+    // 服务端 analyzeAndUpsert 已完成抓取+分析（未配 AI/抓取失败 → 降级 pending 行），UI 只展示结果行。
+    // 分类/子分类为可选 hint：taxonomy 非空才随单送（term 单独送无意义——后端形态归一兜底）。
+    const payload = { url };
+    const tax = $('add-taxonomy').value.trim();
+    const term = $('add-term').value.trim();
+    if (tax) { payload.taxonomy = tax; if (term) payload.term = term; }
+    const { site } = await api('sites', { method: 'POST', body: JSON.stringify(payload) });
     $('add-url').value = '';
+    $('add-taxonomy').value = '';
+    $('add-term').value = '';
     const pairs = {
       ID: site.id, 'URL（规范化）': site.url, 'URL（原样）': site.url_raw, 标题: site.title,
       描述: site.description || '（空）', 分类: site.taxonomy, 子分类: site.term || '（无）',
@@ -371,6 +425,8 @@ async function addSite() {
 }
 $('add-go').addEventListener('click', addSite);
 $('add-url').addEventListener('keydown', (e) => { if (e.key === 'Enter') addSite(); });
+// 新增表单联动：term 建议随 taxonomy 输入变化（分类建议清单 #dl-taxonomy 定义在 index.html，全局共享）
+addTermSync = bindTermLink($('add-taxonomy'), $('add-term'), $('dl-term-add'));
 
 /* ---------- 启动 ---------- */
 if (getToken()) {

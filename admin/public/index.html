@@ -94,11 +94,17 @@
 
   <section id="view-add" class="hidden">
     <h2>新增站点（给一个 URL 即添加）</h2>
-    <p class="dim">服务端会抓取页面（配置了 AI 则自动分析标题/描述/分类），失败时降级为占位行，可在列表中继续编辑。</p>
+    <p class="dim">服务端会抓取页面（配置了 AI 则自动分析标题/描述/分类），失败时降级为占位行，可在列表中继续编辑。
+      分类/子分类可选：可从下拉建议中选已有分类，也可直接输入新分类名（后端按形态规则归一兜底）。</p>
     <div id="add-form">
       <input id="add-url" type="text" placeholder="https://example.com" autocomplete="off">
+      <input id="add-taxonomy" type="text" list="dl-taxonomy" placeholder="分类（可选）" autocomplete="off">
+      <input id="add-term" type="text" list="dl-term-add" placeholder="子分类（可选）" autocomplete="off">
       <button id="add-go" type="button">添加</button>
     </div>
+    <!-- 分类选择器数据源：GET /api/admin/categories 的 shapes（union 形态视图），admin.js 填充 -->
+    <datalist id="dl-taxonomy"></datalist>
+    <datalist id="dl-term-add"></datalist>
     <div id="add-result"></div>
   </section>
 </main>
