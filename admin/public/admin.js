@@ -74,6 +74,7 @@ function showView(name) {
   for (const s of document.querySelectorAll('main section')) s.classList.toggle('hidden', s.id !== 'view-' + name);
   if (name === 'list') { loadList(); loadTaxonomies(); }
   if (name === 'add') loadTaxonomies(); // 保证新增视图的分类建议不依赖「先去列表」顺序
+  if (name === 'categories') loadCategories(); // 分类表数据自足（categories+shapes 同响应），不依赖先去列表
 }
 tabs.addEventListener('click', (e) => {
   const v = e.target && e.target.dataset && e.target.dataset.view;
@@ -484,18 +485,311 @@ async function deleteFlow(body, summaryLines, { danger = false, requireText = ''
   const r = await api('sites/batch-delete', { method: 'POST', body: JSON.stringify(body) });
   toast(`已删除 ${r.deleted} 条（前台生效需再点批量发布）`); loadList(); loadTaxonomies();
 }
-$('del-sel').onclick = () => {
-  const ids = [...sel];
-  deleteFlow({ ids }, [`共 ${ids.length} 条选中站点。`]);
+// Task 11 carry-fix（T10 审查 Important）：deleteFlow 里 api() 的失败此前是未处理的 Promise
+// rejection（弹窗关掉后无声无息）。统一包一层 guarded：后端 400/5xx 的 message 原文走 err toast。
+// confirmModal 契约不变（它本身永不 reject），只兜 api 抛错；401 已由 api() 回退口令条，不再重复提示。
+const guarded = (fn) => async (...args) => {
+  try { await fn(...args); }
+  catch (e) { if (e.status !== 401) toast(e.message, { type: 'err', ttl: 8000 }); }
 };
-$('del-filter').onclick = () => {
+$('del-sel').onclick = guarded(() => {
+  const ids = [...sel];
+  return deleteFlow({ ids }, [`共 ${ids.length} 条选中站点。`]);
+});
+$('del-filter').onclick = guarded(() => {
   // listState 含 total/sites 等非筛选键，只取后端白名单四键组 filter（空键剔除后至少一条，
   // 由 hasFilterCond 的按钮禁用态保证，后端亦有 400 兜底）
   const f = { q: listState.q, status: listState.status, taxonomy: listState.taxonomy, term: listState.term };
   const filter = Object.fromEntries(Object.entries(f).filter(([, v]) => v !== ''));
-  deleteFlow({ filter }, [`当前筛选命中 ${lastTotal} 条（${filterDesc()}）。`, '分类下站点被清空后，其分类行会留在分类页（可去分类页删）。']);
-};
-$('del-wipe').onclick = () => deleteFlow({ wipe: '全部删除' }, ['将清空 D1 中全部站点行（不限筛选）。', '前台内容在下一次批量发布前不变；发布有 0 行/骤降闸兜底。'], { danger: true, requireText: '全部删除' });
+  return deleteFlow({ filter }, [`当前筛选命中 ${lastTotal} 条（${filterDesc()}）。`, '分类下站点被清空后，其分类行会留在分类页（可去分类页删）。']);
+});
+$('del-wipe').onclick = guarded(() => deleteFlow({ wipe: '全部删除' }, ['将清空 D1 中全部站点行（不限筛选）。', '前台内容在下一次批量发布前不变；发布有 0 行/骤降闸兜底。'], { danger: true, requireText: '全部删除' }));
+
+/* ---------- 分类视图（Task 11：一等公民 CRUD + 改名级联 + 批删 + 自动 icon 回显） ----------
+ * 后端契约（Task 7）与 UI 侧裁决的落地方式：
+ *  - GET categories → {categories:[{taxonomy,term,icon,sort,siteCount}], shapes}；分组渲染在前端做。
+ *  - PATCH 改名请求会整体忽略 icon/sort（T7 Minor ④）：「保存」把 diff 拆成两步串行 PATCH
+ *    （先改名、后 icon/sort），改名请求里绝不夹带 meta。
+ *  - 顶层行（term=''）只暴露 taxonomy 改名、不暴露 term 编辑（T7 Minor ③：header 行 term 改名
+ *    会静默丢 icon/sort 载体）；子行只暴露 term 改名（整类改名语义专属顶层行，从子行发起会误导）。
+ *  - childless-pair 行 PATCH icon/sort 可能返回 {category:null} 200（T7 Minor ②）：保存后一律
+ *    loadCategories() 整表重载，不信回显。
+ *  - 空 taxonomy 后端 400：UI 先行拦截。
+ *  - 「（未登记）」灰条 = shapes（categories∪sites union）中存在但 categories 表无行的 pair：
+ *    只读、不可勾不可删，「补登记」把 pair 填入新建表单（提交仍走 POST 形态闸）。
+ *  - icon 零前端规则（防漂移裁决）：唯一回显路径 = POST 缺 icon → 201 {category.icon}。 */
+let catRows = [];                 // GET categories 的 categories（含 siteCount）
+const catSel = new Set();         // 勾选 pair 键；每次整表重载清空（同列表页幽灵选择纪律）
+let catFormTermSync = null;       // 新建表单 term placeholder 联动句柄
+const catKey = (tax, term) => tax + '\u0000' + term;
+const catLabel = (r) => (r.term === '' ? `分类「${r.taxonomy}」` : `子分类「${r.taxonomy}/${r.term}」`);
+const catIconOptions = () => [...new Set(catRows.map((r) => r.icon).filter(Boolean))].sort();
+
+
+async function loadCategories() {
+  catSel.clear(); // 整表重建前先清勾选：改名后旧 pair 键失效，残留即幽灵选择（T10 同纪律）
+  try {
+    const { categories, shapes } = await api('categories');
+    catRows = Array.isArray(categories) ? categories : [];
+    if (Array.isArray(shapes)) shapeState.shapes = shapes; // 同响应顺带刷新 combo 建议，不再二次 GET
+    if (catFormTermSync) catFormTermSync();
+    renderCategories();
+  } catch (e) { if (e.status !== 401) toast('加载分类失败：' + e.message, { type: 'err' }); }
+  renderCatChecks(); // 成功/失败都同步勾选态与批删钮（失败时旧表仍在屏上，需跟随已清空的 catSel）
+}
+
+function renderCategories() {
+  const groups = new Map(); // taxonomy -> {header, children[], unnamed[]}
+  const ensure = (tax) => {
+    let g = groups.get(tax);
+    if (!g) { g = { header: null, children: [], unnamed: [] }; groups.set(tax, g); }
+    return g;
+  };
+  for (const r of catRows) {
+    const g = ensure(r.taxonomy);
+    if (r.term === '') g.header = r; else g.children.push(r);
+  }
+  const reg = new Set(catRows.map((r) => catKey(r.taxonomy, r.term)));
+  let unnamedTotal = 0;
+  for (const s of shapeState.shapes) { // union 形态里只在站点出现的 pair → 组尾灰条（不可勾删）
+    const g = ensure(s.taxonomy);
+    for (const t of (s.nested ? s.terms : [''])) {
+      if (!reg.has(catKey(s.taxonomy, t))) { g.unnamed.push(t); unnamedTotal++; }
+    }
+  }
+  $('cat-meta').textContent = `共 ${catRows.length} 分类行${unnamedTotal ? ` · ${unnamedTotal} 个站点 pair 未登记（组尾灰行）` : ''}`;
+  if (!groups.size) { $('cat-table').replaceChildren(el('div', 'empty', '还没有分类——用下方表单新建，或先导入站点')); return; }
+  // 组序：有顶层行的按 sort 排（同值按名），无顶层行的排最后按名
+  const gs = [...groups.entries()].sort((ea, eb) => {
+    const [ta, a] = ea; const [tb, b] = eb;
+    if (a.header && b.header) return (a.header.sort - b.header.sort) || ta.localeCompare(tb);
+    if (a.header) return -1;
+    if (b.header) return 1;
+    return ta.localeCompare(tb);
+  });
+  const table = el('table');
+  const thead = el('thead');
+  const head = el('tr');
+  const chkTh = el('th', 'chk-col');
+  const chkAll = el('input');
+  chkAll.type = 'checkbox'; chkAll.id = 'cat-chk-all'; chkAll.setAttribute('aria-label', '全选分类行');
+  chkAll.onchange = () => {
+    for (const r of catRows) { const k = catKey(r.taxonomy, r.term); if (chkAll.checked) catSel.add(k); else catSel.delete(k); }
+    renderCatChecks();
+  };
+  chkTh.append(chkAll);
+  head.append(chkTh);
+  for (const [t, cls] of [['分类', ''], ['子分类', ''], ['icon', 'cat-icon-col'], ['排序', 'col-sort'], ['站点', ''], ['操作', 'col-ops']]) head.append(el('th', cls, t));
+  thead.append(head);
+  table.append(thead);
+  for (const [tax, g] of gs) {
+    const tbody = el('tbody'); // 一组一 tbody：顶层行粗上边线做分组间隔（style.css）
+    if (g.header) tbody.append(buildCatRow(g.header, true));
+    for (const r of [...g.children].sort((a, b) => (a.sort - b.sort) || a.term.localeCompare(b.term))) tbody.append(buildCatRow(r, false));
+    for (const t of [...g.unnamed].sort((a, b) => a.localeCompare(b))) tbody.append(buildCatUnnamed(tax, t));
+    table.append(tbody);
+  }
+  $('cat-table').replaceChildren(table);
+}
+
+function buildCatRow(row, isHeader) {
+  const tr = el('tr', isHeader ? 'cat-head' : '');
+  const td = (label, cls, ...nodes) => { const c = el('td', cls); c.dataset.label = label; c.append(...nodes); tr.append(c); return c; };
+  const chk = el('input', 'row-chk');
+  chk.type = 'checkbox'; chk.dataset.key = catKey(row.taxonomy, row.term);
+  chk.setAttribute('aria-label', `选择 ${catLabel(row)}`);
+  chk.onchange = () => { if (chk.checked) catSel.add(chk.dataset.key); else catSel.delete(chk.dataset.key); renderCatChecks(); };
+  td('', 'chk-col', chk);
+  let inTax = null;
+  let inTerm = null;
+  if (isHeader) {
+    // 顶层行：taxonomy 输入=整类改名入口；term 不给编辑（T7 Minor ③）
+    inTax = fieldInput('text', row.taxonomy);
+    const bTax = el('button', 'combo-btn', '▾'); bTax.type = 'button'; bTax.setAttribute('aria-label', '选择分类');
+    const wrap = el('span', 'combo'); wrap.append(inTax, bTax);
+    attachCombo(inTax, bTax, allTaxonomies);
+    td('分类', 'cat-tax', wrap);
+    td('子分类', '', el('span', 'dim', '—（顶层）'));
+  } else {
+    td('分类', 'cat-tax cat-child', el('span', '', row.taxonomy)); // 子行分类只读：整类改名从顶层行发起
+    inTerm = fieldInput('text', row.term);
+    td('子分类', 'cat-term', inTerm);
+  }
+  const inIcon = fieldInput('text', row.icon, 'fas fa-xxx'); // 非法类名由后端 FA_CLASS 闸拒 400（前端零规则）
+  const bIcon = el('button', 'combo-btn', '▾'); bIcon.type = 'button'; bIcon.setAttribute('aria-label', '选择现有 icon');
+  const iconWrap = el('span', 'combo'); iconWrap.append(inIcon, bIcon);
+  attachCombo(inIcon, bIcon, catIconOptions);
+  td('icon', 'cat-icon', iconWrap);
+  const inSort = fieldInput('number', row.sort);
+  td('排序', 'col-sort', inSort);
+  const cnt = el('span', 'cnt' + (row.siteCount > 0 ? ' on' : ''), row.siteCount);
+  cnt.title = isHeader ? '直挂该分类（term 空）的站点数' : '该子分类下的站点数';
+  td('站点', '', cnt);
+  const ops = el('div', 'row-ops');
+  ops.append(
+    actionBtn('保存', (btn) => saveCat(row, { btn, isHeader, inTax, inTerm, inIcon, inSort })),
+    actionBtn('删除', (btn) => delCat(row, isHeader, btn), true),
+  );
+  td('操作', 'col-ops', ops);
+  return tr;
+}
+
+function buildCatUnnamed(tax, term) {
+  // 未登记灰条：站点在用但该 pair 在 categories 表无行——不可勾不可删，只能「补登记」为正式行
+  const tr = el('tr', 'cat-unnamed');
+  const td = (label, ...nodes) => { const c = el('td'); c.dataset.label = label; c.append(...nodes); tr.append(c); return c; };
+  const pad = el('td', 'chk-col'); pad.dataset.label = ''; tr.append(pad);
+  td('分类', el('span', '', tax));
+  td('子分类', el('span', '', term === '' ? '—（顶层）' : term), el('span', 'cat-flag', '（未登记）'));
+  td('icon', el('span', 'dim', '—'));
+  td('排序', el('span', 'dim', '—'));
+  td('站点', el('span', 'dim', '有站点在用'));
+  const ops = el('div', 'row-ops');
+  ops.append(actionBtn('补登记', () => {
+    $('cat-new-tax').value = tax;
+    $('cat-new-term').value = term;
+    $('cat-new-tax').dispatchEvent(new Event('input', { bubbles: true })); // 触发 term placeholder 级联重算
+    $('cat-new-term').dispatchEvent(new Event('input', { bubbles: true }));
+    toast(`「${tax}${term ? '/' + term : ''}」已填入新建表单，点「添加」完成登记`, { ttl: 6000 });
+  }));
+  td('操作', ops);
+  return tr;
+}
+
+function renderCatChecks() {
+  for (const cb of $('cat-table').querySelectorAll('input.row-chk')) cb.checked = catSel.has(cb.dataset.key);
+  const chkAll = $('cat-chk-all');
+  if (chkAll) {
+    const keys = catRows.map((r) => catKey(r.taxonomy, r.term));
+    chkAll.checked = keys.length > 0 && keys.every((k) => catSel.has(k));
+    chkAll.indeterminate = !chkAll.checked && keys.some((k) => catSel.has(k));
+  }
+  const b = $('cat-del-sel');
+  b.textContent = `删除选中 (${catSel.size})`;
+  b.disabled = catSel.size === 0;
+}
+
+async function saveCat(row, { btn, isHeader, inTax, inTerm, inIcon, inSort }) {
+  const ren = {};  // 改名键：单独一个 PATCH（后端在改名时忽略夹带的 icon/sort——T7 Minor ④）
+  const meta = {}; // icon/sort 键：改名成功后的第二个 PATCH（或无改名时唯一一次）
+  if (isHeader) {
+    const v = inTax.value.trim();
+    if (v !== row.taxonomy) {
+      if (!v) { toast('分类名不能为空（空分类名会被后端拒绝）', { type: 'err' }); return; }
+      ren.taxonomy = v;
+    }
+  } else {
+    const v = inTerm.value.trim();
+    if (v !== row.term) {
+      if (!v) { toast('子分类名不能为空', { type: 'err' }); return; }
+      ren.term = v;
+    }
+  }
+  const iconV = inIcon.value.trim();
+  if (iconV && iconV !== row.icon) meta.icon = iconV; // 空串后端静默忽略：不送、UI 也不假称已清空
+  else if (!iconV && row.icon) toast('icon 不可清空（空值会被后端忽略，保留原值）', { ttl: 4000 });
+  const sortN = Number(inSort.value);
+  if (Number.isFinite(sortN) && sortN !== row.sort) meta.sort = sortN;
+  if (!Object.keys(ren).length && !Object.keys(meta).length) { toast('没有改动可保存', { ttl: 3000 }); return; }
+  if (Object.keys(ren).length) { // 改名先过级联确认（T10 confirmModal，零 innerHTML）
+    const lines = isHeader
+      ? [`将把「${row.taxonomy}」整体改名为「${ren.taxonomy}」。`, '级联范围：该分类全部分类行 + 其下所有站点行的分类字段同步更新。']
+      : [`将把「${row.taxonomy}/${row.term}」改名为「${row.taxonomy}/${ren.term}」。`, `级联范围：该子分类下 ${row.siteCount} 个站点行同步更新。`];
+    lines.push('目标名已存在时后端会直接拒绝（不提供隐式合并）。');
+    if (!(await confirmModal({ title: '确认改名分类？', lines, danger: true }))) return;
+  }
+  btn.disabled = true;
+  let renamed = false;
+  const loc = { taxonomy: row.taxonomy, term: row.term };
+  try {
+    if (Object.keys(ren).length) {
+      await api('categories', { method: 'PATCH', body: JSON.stringify({ taxonomy: row.taxonomy, term: row.term, new: ren }) });
+      if (ren.taxonomy !== undefined) loc.taxonomy = ren.taxonomy;
+      if (ren.term !== undefined) loc.term = ren.term;
+      renamed = true;
+    }
+    if (Object.keys(meta).length) {
+      await api('categories', { method: 'PATCH', body: JSON.stringify({ taxonomy: loc.taxonomy, term: loc.term, new: meta }) });
+    }
+    toast(`已保存 ${catLabel(loc)}`, { type: 'ok', ttl: 3000 });
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, { type: 'err', ttl: 10000 }); // 撞名 400 等：后端 message 原文
+  } finally {
+    // 一律重载整表（改名可能成功、meta 步可能失败，屏上必须反映真实态；{category:null} 也不可信）
+    await loadCategories();
+    if (renamed) { loadTaxonomies(); loadList(); } // spec 联动语义：筛选下拉与列表同步新名
+    else btn.disabled = false;
+  }
+}
+
+async function delCat(row, isHeader, btn) {
+  const lines = [`${catLabel(row)}：当前直挂 ${row.siteCount} 个站点。`];
+  if (isHeader) lines.push('删除闸：整类（含全部子分类）必须零站点；通过后连带删除其全部子分类行（只动分类表，不触碰站点行）。');
+  const ok = await confirmModal({ title: '确认删除分类？', lines, danger: true });
+  if (!ok) return;
+  btn.disabled = true;
+  try {
+    await api('categories?' + new URLSearchParams({ taxonomy: row.taxonomy, term: row.term }).toString(), { method: 'DELETE' });
+    toast(`已删除 ${catLabel(row)}`, { type: 'ok', ttl: 3000 });
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, { type: 'err', ttl: 10000 }); // 非空 400：后端 message 含站点条数，原文呈现
+    btn.disabled = false;
+    return;
+  }
+  await loadCategories(); loadTaxonomies(); // 分类集合变了：筛选下拉同步（站点行不受影响，无需 loadList）
+}
+
+async function catBatchDelete() {
+  const pairs = catRows.filter((r) => catSel.has(catKey(r.taxonomy, r.term))).map((r) => ({ taxonomy: r.taxonomy, term: r.term }));
+  if (!pairs.length) return;
+  const names = pairs.map((p) => (p.term === '' ? `${p.taxonomy}（顶层）` : `${p.taxonomy}/${p.term}`)).join('、');
+  const ok = await confirmModal({
+    title: '确认批量删除分类？',
+    lines: [`已选 ${pairs.length} 行：${names}`, '原子删除：任一分类非空 → 后端 400 列全阻塞清单，整体拒绝零删除。', '删顶层行会连带删除其子分类行。'],
+    danger: true,
+  });
+  if (!ok) return;
+  const r = await api('categories/batch-delete', { method: 'POST', body: JSON.stringify({ pairs }) });
+  toast(`已删除 ${r.deleted} 分类行（前台生效需再点批量发布）`, { type: 'ok', ttl: 5000 });
+  await loadCategories(); loadTaxonomies();
+}
+// 后端 400（阻塞清单原文）经 guarded 统一 err toast——与 sites 删除族同一错误呈现纪律
+$('cat-del-sel').onclick = guarded(catBatchDelete);
+
+async function createCat() {
+  const tax = $('cat-new-tax').value.trim();
+  if (!tax) { toast('请输入分类名（空分类会被后端拒绝）', { type: 'err' }); return; }
+  const term = $('cat-new-term').value.trim();
+  const icon = $('cat-new-icon').value.trim();
+  const payload = { taxonomy: tax };
+  if (term) payload.term = term;
+  if (icon) payload.icon = icon; // 缺省走后端 resolveIcon——201 回显是唯一 icon 预览路径（前端零规则）
+  const btn = $('cat-new-go'); btn.disabled = true;
+  try {
+    const { category } = await api('categories', { method: 'POST', body: JSON.stringify(payload) });
+    const label = category ? catLabel(category) : `分类「${tax}${term ? '/' + term : ''}」`;
+    if (!icon && category) {
+      $('cat-new-icon').value = category.icon; // 201 回显 → 回填 icon 输入框；要改就改行内值再点「保存」（PATCH）
+      toast(`${label} 已添加；已自动配 icon「${category.icon}」`, { type: 'ok', ttl: 6000 });
+    } else {
+      toast(`${label} 已添加`, { type: 'ok', ttl: 4000 });
+    }
+    $('cat-new-tax').value = '';
+    $('cat-new-term').value = '';
+    await loadCategories(); loadTaxonomies();
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, { type: 'err', ttl: 10000 }); // 形态相反 400 等：后端 message 原文
+  } finally {
+    btn.disabled = false;
+  }
+}
+$('cat-new-go').addEventListener('click', createCat);
+$('cat-reload').addEventListener('click', () => loadCategories());
+// 新建表单联动：term placeholder 随 taxonomy 级联；三个 combo 的选项全部实时取自现有数据（零规则）
+catFormTermSync = bindTermLink($('cat-new-tax'), $('cat-new-term'));
+attachCombo($('cat-new-tax'), document.querySelector('.combo-btn[data-combo-for="cat-new-tax"]'), allTaxonomies);
+attachCombo($('cat-new-term'), document.querySelector('.combo-btn[data-combo-for="cat-new-term"]'), () => termsFor($('cat-new-tax').value));
+attachCombo($('cat-new-icon'), document.querySelector('.combo-btn[data-combo-for="cat-new-icon"]'), catIconOptions);
 
 /* ---------- 批量发布 ---------- */
 $('publish-btn').addEventListener('click', async (btn) => {

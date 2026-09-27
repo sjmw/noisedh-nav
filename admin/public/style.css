@@ -178,6 +178,29 @@ button.primary.danger:hover:not(:disabled) { filter: brightness(1.06); border-co
 #modal-host input { width: 100%; } /* 复用全局 input 样式，仅补宽度 */
 .modal button { align-self: flex-end; min-width: 7rem; }
 
+/* ---------- 分类视图（Task 11）：分组表 + 站点数徽章 + 未登记灰条 ---------- */
+#cat-toolbar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .6rem 0 .2rem; }
+#cat-meta { font-size: 13px; }
+#cat-table { overflow-x: auto; margin-top: .4rem; }
+#cat-table table { min-width: 46rem; }
+#cat-table td { vertical-align: middle; }
+#cat-table .cat-icon { width: 11rem; }
+#cat-table tbody tr.cat-head > td { background: var(--acc-soft); border-top: 2px solid var(--line); }
+#cat-table tbody:first-of-type tr.cat-head > td { border-top: none; } /* 首组不留顶线，分组间隔只出现在组与组之间 */
+.cat-child { padding-left: 1.6rem; }   /* 子行分类单元格缩进（brief 原样） */
+.cat-unnamed { opacity: .6; }          /* 未登记 pair 灰条 */
+.cat-flag { color: var(--dim); font-size: 12.5px; }
+.cnt {
+  display: inline-block; min-width: 2.4rem; text-align: center;
+  border-radius: 999px; padding: .05rem .55rem;
+  font-size: 12.5px; font-weight: 700;
+  background: var(--surface-2); color: var(--dim);
+}
+.cnt.on { background: var(--acc); color: var(--acc-ink); } /* siteCount>0 蓝底 */
+#cat-new { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+#cat-new .combo { flex: 1 1 9rem; min-width: 9rem; }
+#cat-new #cat-new-icon { flex: 0 1 14rem; min-width: 8rem; }
+
 /* ---------- 列表视图 ---------- */
 #filters { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
 #filters #f-q { flex: 1; min-width: 12rem; }
@@ -397,4 +420,14 @@ th.chk-col input, td.chk-col input { width: auto; min-width: 0; accent-color: va
   /* Task 10：弹窗移动端收窄；按钮给足触区 */
   .modal { width: min(92vw, 26rem); }
   .modal button { min-height: 42px; }
+  /* Task 11：分类表并入全局卡片化规则（tbody tr/td 选择器本就未限容器），
+     这里只解除横向滚动与最小宽度，并给首列避让绝对定位勾选框 */
+  #cat-table { overflow-x: visible; }
+  #cat-table table { min-width: 0; }
+  #cat-table tbody td:nth-child(2) { padding-left: 1.9rem; }
+  #cat-toolbar { flex-wrap: wrap; }
+  #cat-del-sel, #cat-reload { min-height: 42px; }
+  #cat-new { flex-direction: column; align-items: stretch; }
+  #cat-new .combo { flex: none; width: 100%; }
+  #cat-new-go { min-height: 42px; }
 }

@@ -21,6 +21,7 @@
   </div>
   <nav id="tabs" class="hidden" aria-label="视图切换">
     <button type="button" data-view="list">列表</button>
+    <button type="button" data-view="categories">分类</button>
     <button type="button" data-view="import">导入</button>
     <button type="button" data-view="add">新增</button>
   </nav>
@@ -51,6 +52,25 @@
       <button id="page-prev" type="button">上一页</button>
       <span id="page-info" class="dim"></span>
       <button id="page-next" type="button">下一页</button>
+    </div>
+  </section>
+
+  <section id="view-categories" class="hidden">
+    <div id="cat-toolbar">
+      <button id="cat-del-sel" type="button" class="danger" disabled>删除选中 (0)</button>
+      <button id="cat-reload" type="button" title="重新加载分类表">刷新</button>
+      <span id="cat-meta" class="dim"></span>
+    </div>
+    <!-- 分组表：顶层行（term=''）按 sort 排，子行紧随；只在站点出现的 pair 以灰条「（未登记）」列组尾 -->
+    <div id="cat-table"></div>
+    <h2>新建分类</h2>
+    <p class="dim">分类名必填；子分类仅在嵌套分类下可填（平铺分类填了会被后端拒绝）。icon 留空则后端自动配置
+      （唯一回显路径 = 添加成功后 201 响应，前端零规则；点 ▾ 可从现有 icon 集中挑选）。</p>
+    <div id="cat-new">
+      <span class="combo"><input id="cat-new-tax" type="text" placeholder="分类名（必填）" autocomplete="off"><button type="button" class="combo-btn" data-combo-for="cat-new-tax" aria-label="选择分类">▾</button></span>
+      <span class="combo"><input id="cat-new-term" type="text" placeholder="子分类（可选）" autocomplete="off"><button type="button" class="combo-btn" data-combo-for="cat-new-term" aria-label="选择子分类">▾</button></span>
+      <span class="combo"><input id="cat-new-icon" type="text" placeholder="icon（留空=自动配置）" autocomplete="off"><button type="button" class="combo-btn" data-combo-for="cat-new-icon" aria-label="选择现有 icon">▾</button></span>
+      <button id="cat-new-go" class="primary" type="button">添加</button>
     </div>
   </section>
 
