@@ -191,8 +191,25 @@ describe('doPublish（发布即快照 + 冲突中止）', () => {
     expect((await getSiteByUrl(db, 'https://pend-c.test/'))?.status).toBe('published');
   });
 
-  it('GitHub 写失败（非 409，HTTP 500）→ fetch_failed；pending 完全不动', async () => {
-    await seed('https://pend-d.test/', 'pending', '待审频道E');
+  it('远端 = 本次将写内容 → 幂等短接：恰一次 GET、零 PUT，成功且 pending 照常翻转（干跑二遍不产生空 commit）', async () => {
+    await seed('https://noop-a.test/', 'published', '幂等已发G');
+    await seed('https://noop-b.test/', 'pending', '幂等待审H');
+    // 第一遍：正常发布，从 PUT body 捕获本次写入的精确文本
+    const { calls: c1, fetchImpl: f1 } = mkFetch([okGet('sha-n1'), okPut()[0]!]);
+    const r1 = await doPublish(mkEnv(), db, f1);
+    expect(r1.ok).toBe(true);
+    const written = unb64(JSON.parse(c1[1]!.body).content);
+    // 人为把 noop-b 拨回 pending：快照文本不变（发布即快照本就含它），但短接路径确有 pending 可翻
+    await db.prepare('UPDATE sites SET status = ? WHERE url = ?').bind('pending', 'https://noop-b.test/').run();
+    // 第二遍：远端原样回显刚写入的内容 → 只 GET，绝不 PUT
+    const { calls: c2, fetchImpl: f2 } = mkFetch([{ body: { content: wrap(b64(written)), sha: 'sha-n2' } }]);
+    const r2 = await doPublish(mkEnv(), db, f2);
+    expect(r2).toMatchObject({ ok: true, commitUrl: 'https://github.com/sjmw/noisedh-nav/blob/main/data/webstack.yml' });
+    expect(c2.map((c) => c.method)).toEqual(['GET']);
+    expect((await getSiteByUrl(db, 'https://noop-b.test/'))?.status).toBe('published'); // 短接路径也翻转 pending
+  });
+
+  it('GitHub 写失败（非 409，HTTP 500）→ fetch_failed；pending 完全不动', async () => {    await seed('https://pend-d.test/', 'pending', '待审频道E');
     const { calls, fetchImpl } = mkFetch([okGet('sha-e'), { status: 500, body: { message: 'backend error' } }]);
     const r = await doPublish(mkEnv(), db, fetchImpl);
     expect(r).toMatchObject({ ok: false, code: 'fetch_failed' });

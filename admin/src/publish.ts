@@ -67,6 +67,12 @@ export async function doPublish(
     if (remoteCount >= MIN_REMOTE_FOR_RATIO_GATE && snapshot.length * 2 < remoteCount) {
       return { ok: false, code: 'bad_request', message: `快照仅 ${snapshot.length} 条站点，不足远端 ${remoteCount} 条的一半，疑似误发布，已拒绝（请核对 D1 数据后重试）` };
     }
+    if (remoteText === yml) {
+      // 幂等短接：远端逐字节等于本次将写（同 sha PUT 相同内容的 GitHub 行为未验证，且会留空 commit 噪音）——
+      // 不发 PUT，按发布成功处理；pending 照常翻转（快照含它们且已在远端，翻转正是收敛）。
+      await markPendingPublished(db, pending.map((r) => r.id));
+      return { ok: true, commitUrl: `https://github.com/${repo}/blob/main/${PATH}`, count: snapshot.length };
+    }
     try {
       commitUrl = (await ghPut(repo, PATH, yml, sha, message, token, fetchImpl)).commitUrl;
     } catch (e) {
