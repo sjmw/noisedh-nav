@@ -3,10 +3,10 @@ import type { Env } from './types';
 import { UA } from './extract';
 
 export const DEFAULT_ICON = 'fas fa-folder-open fa-lg';
-// 接受 fa / fas / far / fab 前缀 + 可选尺寸后缀；其余一律弃（防注入非类名串进前台模板）
-export const FA_CLASS = /^fa[sbr]? fa-[a-z][a-z0-9]*(-[a-z0-9]+)*?( (xs|sm|lg|xl|2x|3x|4x|5x))?$/;
+// 接受 fa / fas / far / fab 前缀 + 可选 canonical 尺寸后缀（' fa-lg' 形态，与 DEFAULT_ICON/AI 提示语一致）；其余一律弃（防注入非类名串进前台模板）
+export const FA_CLASS = /^fa[sbr]? fa-[a-z][a-z0-9]*(-[a-z0-9]+)*?( fa-(xs|sm|lg|xl|2x|3x|4x|5x))?$/;
 
-// 规则表（spec §5，30 条）：比对序=表序，先命中先赢；键对 toLowerCase 后的名字做 contains。
+// 规则表（spec §5，30 条）：比对序=表序，先命中先赢；键对 toLowerCase 后的名字做 contains（纯 ASCII 小写键另加词边界，见 keyHit）。
 const RULES: ReadonlyArray<readonly [string[], string]> = [
   [['设计', '美工', '素材', 'design'], 'fas fa-palette'],
   [['视频', '影视', '剧集', '剪辑', 'video'], 'fas fa-film'],
@@ -40,9 +40,22 @@ const RULES: ReadonlyArray<readonly [string[], string]> = [
   [['热门', '热'], 'fas fa-fire'],
 ];
 
+// 规则命中判定：纯 ASCII 小写键要求 ASCII 词边界（前后邻字若非空须非 [a-z0-9]），
+// 否则 'mail' 会被 'ai' 子串劫持；含 CJK 的键维持 contains 即中（'AI合成' 照常命中）。
+const ASCII_KEY = /^[a-z0-9]+$/;
+function keyHit(n: string, k: string): boolean {
+  if (!ASCII_KEY.test(k)) return n.includes(k);
+  for (let i = n.indexOf(k); i >= 0; i = n.indexOf(k, i + 1)) {
+    const before = i === 0 ? '' : n[i - 1]!;
+    const after = i + k.length >= n.length ? '' : n[i + k.length]!;
+    if (!/[a-z0-9]/.test(before) && !/[a-z0-9]/.test(after)) return true;
+  }
+  return false;
+}
+
 export function iconFor(name: string): string {
   const n = name.toLowerCase();
-  for (const [keys, icon] of RULES) if (keys.some((k) => n.includes(k))) return icon;
+  for (const [keys, icon] of RULES) if (keys.some((k) => keyHit(n, k))) return icon;
   return DEFAULT_ICON;
 }
 
@@ -55,7 +68,7 @@ export async function resolveIcon(name: string, env: Env, fetchImpl: typeof fetc
   try {
     const res = await fetchImpl(`${AI_BASE_URL.replace(/\/+$/, '')}/chat/completions`, {
       method: 'POST',
-      // UA 纪律同 ai.ts/extract.ts：workerd 默认 UA 会被 Cloudflare 前置端点 403
+      // UA 纪律源自 extract.ts：workerd 默认 UA 会被 Cloudflare 前置的端点 403（见 extract.ts UA 常量注释）
       headers: { 'Content-Type': 'application/json', 'User-Agent': UA, Authorization: `Bearer ${AI_API_KEY}` },
       body: JSON.stringify({ model: AI_MODEL, temperature: 0, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: AI_ICON_PROMPT }, { role: 'user', content: name }] }),
       signal: AbortSignal.timeout(8000),

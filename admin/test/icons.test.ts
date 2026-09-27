@@ -16,17 +16,29 @@ describe('iconFor（关键词规则表）', () => {
   it('比对序=表序先命中先赢：设计 排在 工具 前，「工具设计」落 fa-palette', () => {
     expect(iconFor('工具设计')).toBe('fas fa-palette');
   });
+  it('ASCII 键带词边界：「ai」不做「mail」/「details」的子串命中；CJK 相邻始终算命中', () => {
+    expect(iconFor('邮件mail')).toBe('fas fa-envelope'); // 第 14 条［邮箱/邮件/mail］，不被第 8 条「ai」劫持
+    expect(iconFor('AI合成')).toBe('fas fa-robot'); // 「ai」紧邻 CJK → 边界成立，规则 8 正常命中
+    expect(iconFor('details页面')).not.toBe('fas fa-robot'); // 「details」内含「ai」子串但非独立词
+    expect(iconFor('details页面')).toBe(DEFAULT_ICON);
+  });
+  it('回归护栏：独立英文词与词内大小写仍命中（nav 独立、music 尾部）', () => {
+    expect(iconFor('my nav')).toBe('fas fa-compass');
+    expect(iconFor('Music 世界')).toBe('fas fa-music');
+  });
 });
 
 describe('FA_CLASS（类名白名单，防非类名串进前台模板）', () => {
-  it('接受 fa/s/r/b 前缀词 + 空格 + fa-类名 + 可选尺寸后缀（正则按 brief 逐字落地）', () => {
+  it('接受 fa/s/r/b 前缀词 + 空格 + fa-类名 + 可选「fa-尺寸」后缀；裸词后缀不收', () => {
     expect(FA_CLASS.test('fa fa-folder-open')).toBe(true);
     expect(FA_CLASS.test('fas fa-gamepad')).toBe(true);
     expect(FA_CLASS.test('far fa-heart')).toBe(true);
     expect(FA_CLASS.test('fab fa-github')).toBe(true);
-    expect(FA_CLASS.test('fas fa-fire lg')).toBe(true); // brief 正则的尺寸后缀形态=' lg'（裸词）
+    expect(FA_CLASS.test('fas fa-fire lg')).toBe(false); // 裸词 ' lg' 不是合法 FA 尺寸 token（canonical 形态是 ' fa-lg'）
+    expect(FA_CLASS.test('fas fa-gamepad fa-lg')).toBe(true); // canonical 尺寸后缀收
+    expect(FA_CLASS.test(DEFAULT_ICON)).toBe(true); // 兜底常量必须过自己的白名单
     expect(FA_CLASS.test('fa-folder-open')).toBe(false); // 无前缀词裸名不收
-    expect(FA_CLASS.test('fas fa-fire fa-6x')).toBe(false);
+    expect(FA_CLASS.test('fas fa-fire fa-6x')).toBe(false); // 非列内尺寸不收
     expect(FA_CLASS.test('javascript:alert(1)')).toBe(false);
     expect(FA_CLASS.test('fas fa-gamepad onclick=x')).toBe(false);
     expect(FA_CLASS.test('')).toBe(false);
