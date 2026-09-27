@@ -35,6 +35,8 @@
         <option value="published">已发布</option>
       </select>
       <select id="f-taxonomy" aria-label="分类筛选"><option value="">全部分类</option></select>
+      <!-- 子分类筛选：选项级联于上方分类（嵌套分类才有可选子分类），admin.js 联动填充 -->
+      <select id="f-term" aria-label="子分类筛选" disabled><option value="">全部子分类</option></select>
       <button id="f-apply" type="button">筛选</button>
       <button id="publish-btn" class="primary" type="button">批量发布</button>
       <button id="list-reload" type="button" title="重新加载当前页">刷新</button>
@@ -61,16 +63,14 @@
   <section id="view-add" class="hidden">
     <h2>新增站点（给一个 URL 即添加）</h2>
     <p class="dim">服务端会抓取页面（配置了 AI 则自动分析标题/描述/分类），失败时降级为占位行，可在列表中继续编辑。
-      分类/子分类可选：可从下拉建议中选已有分类，也可直接输入新分类名（后端按形态规则归一兜底）。</p>
+      分类/子分类可选：点输入框右侧 ▾ 从已有分类中选择（分类↔子分类级联联动），也可直接输入新分类名（后端按形态规则归一兜底）。</p>
     <div id="add-form">
       <input id="add-url" type="text" placeholder="https://example.com" autocomplete="off">
-      <input id="add-taxonomy" type="text" list="dl-taxonomy" placeholder="分类（可选）" autocomplete="off">
-      <input id="add-term" type="text" list="dl-term-add" placeholder="子分类（可选）" autocomplete="off">
+      <span class="combo"><input id="add-taxonomy" type="text" placeholder="分类（可选）" autocomplete="off"><button type="button" class="combo-btn" data-combo-for="add-taxonomy" aria-label="选择分类">▾</button></span>
+      <span class="combo"><input id="add-term" type="text" placeholder="子分类（可选）" autocomplete="off"><button type="button" class="combo-btn" data-combo-for="add-term" aria-label="选择子分类">▾</button></span>
       <button id="add-go" class="primary" type="button">添加</button>
     </div>
-    <!-- 分类选择器数据源：GET /api/admin/categories 的 shapes（union 形态视图），admin.js 填充 -->
-    <datalist id="dl-taxonomy"></datalist>
-    <datalist id="dl-term-add"></datalist>
+    <!-- 分类选择器数据源：GET /api/admin/categories 的 shapes（union 形态视图），admin.js 填充自制 combobox 弹单 -->
     <div id="add-result"></div>
   </section>
 </main>

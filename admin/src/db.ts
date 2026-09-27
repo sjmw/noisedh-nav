@@ -44,6 +44,7 @@ export async function deleteSite(db: D1Database, id: number): Promise<void> {
 export interface ListOpts {
   status?: string;
   taxonomy?: string;
+  term?: string;  // 子分类精确匹配（与 taxonomy 组合成级联筛选；空串视同不过滤）
   q?: string;     // 对 title/url/description 做 LIKE 包含匹配（通配符按字面量转义）
   page?: number;  // 默认 1
   perPage?: number; // 默认 50，上限 200
@@ -54,6 +55,7 @@ export async function listSites(db: D1Database, opts: ListOpts = {}): Promise<{ 
   const vals: (string | number)[] = [];
   if (opts.status) { where.push('status = ?'); vals.push(opts.status); }
   if (opts.taxonomy) { where.push('taxonomy = ?'); vals.push(opts.taxonomy); }
+  if (opts.term) { where.push('term = ?'); vals.push(opts.term); }
   if (opts.q) {
     const like = `%${opts.q.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
     where.push(`(title LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')`);

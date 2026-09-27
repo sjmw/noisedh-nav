@@ -154,6 +154,35 @@ input[type="search"], input[type="file"] { min-width: 10rem; }
 /* ---------- 列表视图 ---------- */
 #filters { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
 #filters #f-q { flex: 1; min-width: 12rem; }
+#filters #f-term { max-width: 9.5rem; }
+#filters #f-term:disabled { opacity: .5; }
+
+/* ---------- 分类 combobox（反馈修复轮：datalist 点输入框不弹建议 → 自制弹单） ---------- */
+.combo { display: inline-flex; align-items: stretch; min-width: 0; }
+td .combo { width: 100%; }
+.combo input { flex: 1; min-width: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.combo-btn {
+  border-top-left-radius: 0; border-bottom-left-radius: 0;
+  padding-inline: .55rem; min-width: 2rem;
+}
+/* 行内编辑：combo 内输入保持透明底风格（对齐 td input 原规则） */
+td .combo input { background: transparent; border-color: transparent; }
+td .combo:hover input, td .combo:focus-within input { background: var(--surface); border-color: var(--line); }
+.combo-menu {
+  position: fixed; z-index: 60;
+  max-height: 16rem; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+  display: flex; flex-direction: column; padding: .25rem;
+}
+.combo-opt {
+  border: none; background: none; text-align: left; border-radius: 6px;
+  padding: .4rem .6rem; font-size: 14px; color: var(--ink); flex: none;
+}
+.combo-opt:hover { background: var(--acc-soft); border-color: transparent; }
+.combo-opt.on { color: var(--acc); font-weight: 600; }
+.combo-none { color: var(--dim); font-size: 13px; padding: .4rem .6rem; }
+
 #list-meta { color: var(--dim); margin: .6rem 0 .2rem; font-size: 13px; }
 #table-wrap { overflow-x: auto; margin-top: .4rem; }
 table { border-collapse: collapse; width: 100%; }
@@ -278,6 +307,10 @@ td input:focus, td select:focus { background: var(--surface); border-color: var(
   #filters > * { width: 100%; }
   #filters #f-q { min-width: 0; }
   #publish-btn, #f-apply, #list-reload { min-height: 42px; }
+  #filters #f-term { max-width: none; }
+  .combo-btn { min-width: 2.6rem; }
+  .combo-menu { max-height: 12rem; }
+  .combo-opt { padding: .55rem .7rem; font-size: 15px; }
   #add-form { flex-direction: column; align-items: stretch; }
   #add-form input { min-width: 0; }
   #add-go { min-height: 42px; }

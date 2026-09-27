@@ -101,34 +101,95 @@ $('token-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') ent
 $('token-clear').addEventListener('click', () => { setToken(''); applyAuthedUi(false); toast('口令已清除', { ttl: 3000 }); });
 
 /* ---------- 列表视图 ---------- */
-const listState = { q: '', status: '', taxonomy: '', page: 1, perPage: 50, total: 0, sites: [] };
+const listState = { q: '', status: '', taxonomy: '', term: '', page: 1, perPage: 50, total: 0, sites: [] };
 
-/* ---------- 分类形态缓存与选择器（冒烟修复轮：后台分类/子分类改 datalist 联动） ----------
+/* ---------- 分类形态缓存与组合框（2026-09-27 反馈修复轮：datalist → 自制 combobox） ----------
  * 数据源 = GET categories 的 shapes 字段（categories∪sites union 形态视图，与后端
  * resolveCategoryShape 同一取证口径）。后端已对四个写入口做形态归一，前端只负责「给对建议」，
- * 提交逻辑不变（flat 分类填了子分类也会被后端静默置空，前端用 placeholder 明示规则）。 */
+ * 提交逻辑不变（flat 分类填了子分类也会被后端静默置空，placeholder 明示规则）。
+ * 原生 datalist 点击输入框不弹建议（Chrome 要先打字、iOS Safari 干脆不渲染），改为
+ * 点 ▾ / 点输入框即弹出全部可选项的自制菜单；输入过滤与自由输入新分类均保留。 */
 const shapeState = { shapes: [] };
-// 旧服务端/旧响应缺 shapes 时降级为空清单：datalist 无建议、输入仍自由（后端兜底）。
+// 旧服务端/旧响应缺 shapes 时降级为空清单：弹单显示「暂无可选项」、输入仍自由（后端兜底）。
 const shapeOf = (tax) => shapeState.shapes.find((s) => s.taxonomy === tax.trim()) || null;
+const allTaxonomies = () => [...new Set(shapeState.shapes.map((s) => s.taxonomy))].sort();
+const termsFor = (tax) => {
+  const s = shapeOf(tax);
+  if (s && s.nested) return s.terms;
+  if (s) return []; // flat 分类无子分类
+  return [...new Set(shapeState.shapes.filter((x) => x.nested).flatMap((x) => x.terms))].sort(); // 未定分类：给全部已有子分类兜底
+};
 
-function fillTaxonomyDatalist(dl) {
-  dl.replaceChildren();
-  for (const t of [...new Set(shapeState.shapes.map((s) => s.taxonomy))].sort()) dl.append(new Option(t, t));
+/* 单例弹出菜单：挂在 body 下（fixed 定位），避免被表格滚动容器/卡片 overflow 裁剪 */
+let comboOwner = null; // { input, menu, optsFn }
+function closeCombo() {
+  if (!comboOwner) return;
+  comboOwner.menu.remove();
+  comboOwner = null;
+}
+function openCombo(input, optsFn) {
+  if (comboOwner && comboOwner.input === input) { renderCombo(); return; } // 已开着：按当前输入重过滤
+  closeCombo();
+  const menu = el('div', 'combo-menu');
+  comboOwner = { input, menu, optsFn };
+  document.body.append(menu);
+  renderCombo();
+  const r = input.getBoundingClientRect();
+  menu.style.left = r.left + 'px';
+  menu.style.width = Math.max(r.width, 160) + 'px';
+  // 视口下方放不下就向上翻
+  if (r.bottom + menu.offsetHeight + 8 > innerHeight) menu.style.top = Math.max(8, r.top - menu.offsetHeight - 4) + 'px';
+  else menu.style.top = (r.bottom + 4) + 'px';
+}
+function renderCombo() {
+  if (!comboOwner) return;
+  const { input, menu, optsFn } = comboOwner;
+  const opts = optsFn() || [];
+  const kw = input.value.trim().toLowerCase();
+  // 输入非空时按「包含」过滤；若恰为已选值本身（选中回填后未继续打字）不过滤，全清单仍可见
+  const match = kw && !opts.includes(input.value.trim()) ? opts.filter((o) => o.toLowerCase().includes(kw)) : opts;
+  menu.replaceChildren();
+  for (const o of match.slice(0, 300)) {
+    const b = el('button', 'combo-opt', o);
+    b.type = 'button';
+    if (o === input.value) b.classList.add('on');
+    b.addEventListener('mousedown', (e) => e.preventDefault()); // 先于 input blur 触发，防菜单被提前关掉
+    b.addEventListener('click', () => {
+      input.value = o;
+      input.dispatchEvent(new Event('input', { bubbles: true })); // 走原生联动（term 建议/placeholder）
+      closeCombo();
+    });
+    menu.append(b);
+  }
+  if (!match.length) menu.append(el('div', 'combo-none', '无可选项——直接输入即为新分类'));
+}
+document.addEventListener('click', (e) => {
+  if (!comboOwner) return;
+  if (comboOwner.input === e.target || comboOwner.menu.contains(e.target)) return;
+  closeCombo();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeCombo(); });
+addEventListener('resize', closeCombo);
+addEventListener('scroll', (e) => { // 页面/表格滚动时菜单不跟位，直接收起；菜单自身内滚不动作
+  if (comboOwner && e.target instanceof Node && comboOwner.menu.contains(e.target)) return;
+  closeCombo();
+}, true);
+
+// 把「input + ▾ 按钮」接成组合框：点 ▾ 或点输入框都弹全清单；继续打字实时过滤。
+function attachCombo(input, btn, optsFn) {
+  btn.addEventListener('click', (e) => { e.stopPropagation(); openCombo(input, optsFn); });
+  input.addEventListener('click', () => openCombo(input, optsFn));
+  input.addEventListener('input', () => { if (comboOwner && comboOwner.input === input) renderCombo(); });
 }
 
-// term 的 datalist 随当前 taxonomy 输入联动；返回 sync 供外部（数据刷新后）主动重算
-function bindTermLink(taxInput, termInput, dl) {
+// term 的 placeholder 随当前 taxonomy 联动；返回 sync 供数据刷新后重算（建议清单经
+// termsFor 实时读取，弹出时天然跟随分类输入，无需缓存回填）
+function bindTermLink(taxInput, termInput) {
   const sync = () => {
     const shape = shapeOf(taxInput.value);
-    dl.replaceChildren();
-    if (shape && shape.nested) {
-      for (const t of shape.terms) dl.append(new Option(t, t));
-      termInput.placeholder = '子分类（选已有或输入新子分类名）';
-    } else if (shape) {
-      termInput.placeholder = '平铺分类：子分类留空即可（填了会被丢弃）';
-    } else {
-      termInput.placeholder = taxInput.value.trim() ? '新分类：可直接起子分类名' : '子分类（可选）';
-    }
+    if (shape && shape.nested) termInput.placeholder = '子分类（点 ▾ 选已有或输入新子分类名）';
+    else if (shape) termInput.placeholder = '平铺分类：子分类留空即可（填了会被丢弃）';
+    else termInput.placeholder = taxInput.value.trim() ? '新分类：可直接起子分类名' : '子分类（可选）';
   };
   taxInput.addEventListener('input', sync);
   sync();
@@ -148,10 +209,24 @@ async function loadTaxonomies() {
     const taxes = shapes && shapes.length ? shapes.map((s) => s.taxonomy) : categories.map((c) => c.taxonomy);
     for (const t of [...new Set(taxes)].sort()) sel.append(new Option(t, t));
     if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
-    fillTaxonomyDatalist($('dl-taxonomy'));
-    if (addTermSync) addTermSync();
+    syncTermFilter();
+    if (addTermSync) addTermSync(); // 数据刷新后重算新增表单 term 的 placeholder
   } catch { /* 401 已由 api() 处理，其余静默（筛选器缺分类不致命） */ }
 }
+
+// 子分类筛选级联：选项 = 当前所选分类的嵌套 terms；未选分类或平铺分类时禁用
+function syncTermFilter() {
+  const sel = $('f-term');
+  const cur = sel.value;
+  const shape = shapeOf($('f-taxonomy').value);
+  const terms = shape && shape.nested ? shape.terms : [];
+  sel.replaceChildren(new Option(terms.length ? '全部子分类' : '无子分类', ''));
+  for (const t of terms) sel.append(new Option(t, t));
+  if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
+  sel.disabled = !terms.length;
+  if (sel.disabled) sel.value = '';
+}
+$('f-taxonomy').addEventListener('change', syncTermFilter);
 
 async function loadList() {
   try {
@@ -159,6 +234,7 @@ async function loadList() {
     if (listState.q) p.set('q', listState.q);
     if (listState.status) p.set('status', listState.status);
     if (listState.taxonomy) p.set('taxonomy', listState.taxonomy);
+    if (listState.term) p.set('term', listState.term);
     p.set('page', String(listState.page));
     p.set('perPage', String(listState.perPage));
     const data = await api('sites?' + p.toString());
@@ -219,15 +295,17 @@ function buildRow(site) {
   const inTitle = fieldInput('text', site.title);
   const inDesc = fieldInput('text', site.description);
   const inLogo = fieldInput('text', site.logo, '文件名或 URL');
-  // 分类/子分类：input + datalist 联动（taxonomy 共享全局清单；term 每行独立 datalist，
-  // 多行并行编辑时各行建议跟随本行分类输入）。datalist 放在行内，随行销毁不残留。
+  // 分类/子分类：自制 combobox（输入框+▾ 弹单，选项打开时实时取，多行并行编辑互不串扰）。
+  // term placeholder/建议跟随本行 taxonomy 输入联动；行销毁时弹单由外点/Esc/滚动兜底关闭。
   const inTax = fieldInput('text', site.taxonomy);
-  inTax.setAttribute('list', 'dl-taxonomy');
+  const btnTax = el('button', 'combo-btn', '▾'); btnTax.type = 'button'; btnTax.setAttribute('aria-label', '选择分类');
+  const taxWrap = el('span', 'combo'); taxWrap.append(inTax, btnTax);
+  attachCombo(inTax, btnTax, allTaxonomies);
   const inTerm = fieldInput('text', site.term);
-  const dlTerm = el('datalist');
-  dlTerm.id = 'dl-term-row-' + site.id;
-  inTerm.setAttribute('list', dlTerm.id);
-  bindTermLink(inTax, inTerm, dlTerm);
+  const btnTerm = el('button', 'combo-btn', '▾'); btnTerm.type = 'button'; btnTerm.setAttribute('aria-label', '选择子分类');
+  const termWrap = el('span', 'combo'); termWrap.append(inTerm, btnTerm);
+  bindTermLink(inTax, inTerm);
+  attachCombo(inTerm, btnTerm, () => termsFor(inTax.value));
   const inStatus = el('select');
   // 美化轮：option 文案去掉英文尾巴（value 仍是 pending/published 不变），胶囊徽标不再截断
   inStatus.append(new Option('待发布', 'pending'), new Option('已发布', 'published'));
@@ -238,7 +316,7 @@ function buildRow(site) {
   paintStatus();
   const inSort = fieldInput('number', site.sort); // 美化轮：宽度交给列类 col-sort，去掉内联 5rem
   td('URL(原样)', '', inUrl); td('标题', 'cell-title', inTitle); td('描述', '', inDesc); td('Logo', '', inLogo);
-  td('分类', '', inTax); td('子分类', '', inTerm, dlTerm); td('状态', 'col-status', inStatus); td('排序', 'col-sort', inSort);
+  td('分类', '', taxWrap); td('子分类', '', termWrap); td('状态', 'col-status', inStatus); td('排序', 'col-sort', inSort);
   td('来源', '', el('span', 'dim', site.source));
 
   const ops = el('div', 'row-ops');
@@ -310,6 +388,7 @@ $('f-apply').addEventListener('click', () => {
   listState.q = $('f-q').value.trim();
   listState.status = $('f-status').value;
   listState.taxonomy = $('f-taxonomy').value;
+  listState.term = $('f-term').disabled ? '' : $('f-term').value;
   listState.page = 1;
   loadList();
 });
@@ -447,8 +526,10 @@ async function addSite() {
 }
 $('add-go').addEventListener('click', addSite);
 $('add-url').addEventListener('keydown', (e) => { if (e.key === 'Enter') addSite(); });
-// 新增表单联动：term 建议随 taxonomy 输入变化（分类建议清单 #dl-taxonomy 定义在 index.html，全局共享）
-addTermSync = bindTermLink($('add-taxonomy'), $('add-term'), $('dl-term-add'));
+// 新增表单联动：term 建议随 taxonomy 输入变化（自制 combobox，弹单选项打开时实时取 shapes）
+addTermSync = bindTermLink($('add-taxonomy'), $('add-term'));
+attachCombo($('add-taxonomy'), document.querySelector('.combo-btn[data-combo-for="add-taxonomy"]'), allTaxonomies);
+attachCombo($('add-term'), document.querySelector('.combo-btn[data-combo-for="add-term"]'), () => termsFor($('add-taxonomy').value));
 
 /* ---------- 启动 ---------- */
 if (getToken()) {

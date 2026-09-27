@@ -84,6 +84,21 @@ describe('/api/admin/sites CRUD', () => {
     const q = await getJson(await dev.fetch('/api/admin/sites?q=rt2', { headers: auth }));
     expect(q.total).toBe(1);
   });
+  it('GET 列表：term 子分类精确筛选（嵌套分类先建形，term 才不被归一空置）', async () => {
+    await post('/api/admin/sites', { url: 'https://tf-a.invalid', taxonomy: 'TF筛选', term: '子甲' });
+    await post('/api/admin/sites', { url: 'https://tf-b.invalid', taxonomy: 'TF筛选', term: '子乙' });
+    await post('/api/admin/sites', { url: 'https://tf-c.invalid', taxonomy: 'TF筛选' });
+    const all = await getJson(await dev.fetch('/api/admin/sites?taxonomy=TF筛选', { headers: auth }));
+    expect(all.total).toBe(3);
+    const jia = await getJson(await dev.fetch('/api/admin/sites?taxonomy=TF筛选&term=%E5%AD%90%E7%94%B2', { headers: auth }));
+    expect(jia.total).toBe(1);
+    expect(jia.sites[0].url).toBe('https://tf-a.invalid');
+    // term 单独可用（跨分类）；term='' 视同不过滤
+    const termOnly = await getJson(await dev.fetch('/api/admin/sites?term=%E5%AD%90%E4%B9%99', { headers: auth }));
+    expect(termOnly.total).toBe(1);
+    const empty = await getJson(await dev.fetch('/api/admin/sites?taxonomy=TF筛选&term=', { headers: auth }));
+    expect(empty.total).toBe(3);
+  });
   it('PATCH 白名单：改 title/status/sort 生效；url 更新（服务端规范化 + url_raw 兜底同步，Task 9/10 裁定a）；id 等白名单外键仍忽略', async () => {
     const id = (await getJson(await post('/api/admin/sites', { url: 'https://patchme.invalid' }))).site.id;
     const res = await dev.fetch(`/api/admin/sites/${id}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ title: '补丁题', status: 'published', sort: 5, url: ' HTTPS://PatchMe.Invalid/x ', id: 999 }) });

@@ -61,7 +61,7 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
     const perPageRaw = num('perPage');
     const perPage = perPageRaw === undefined ? undefined : Math.min(200, Math.max(1, perPageRaw));
     const { rows, total } = await listSites(db, {
-      status: str('status'), q: str('q'), taxonomy: str('taxonomy'), page, perPage,
+      status: str('status'), q: str('q'), taxonomy: str('taxonomy'), term: str('term'), page, perPage,
     });
     return json({ sites: rows, total, page, perPage: perPage ?? 50 });
   }
