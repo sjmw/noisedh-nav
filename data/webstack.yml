@@ -98,6 +98,8 @@
       logo: cloudflare.png
       url: https://dash.cloudflare.com
       description: cloudflare
+- taxonomy: 未分类
+  icon: fas fa-folder-open fa-lg
 - taxonomy: 媒体创作
   icon: fas fa-folder-open fa-lg
   list:
@@ -1549,7 +1551,3 @@
           logo: github.jpg
           url: https://github.com/renmu123/biliLive-tools
           description: 直播一站式处理工具，支持直播录制&视频处理&弹幕处理&录播姬自动上传. Contribute to renmu123/biliLive-tools development by creating an account on GitHub.
-        - title: StreamCap
-          logo: github.jpg
-          url: https://github.com/ihmily/StreamCap
-          description: 多平台直播流自动录制工具 · 基于FFmpeg · 支持监控/定时/转码
