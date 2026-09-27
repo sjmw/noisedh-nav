@@ -503,7 +503,7 @@
           logo: https://tts.femoon.top/favicon-32x32.png
           url: https://tts.femoon.top/cn
           description: 在线配音工具
-        - title: 'Kokoro TTS: Advanced Text-to-Speech AI with Best Efficiency'
+        - title: "Kokoro TTS: Advanced Text-to-Speech AI with Best Efficiency"
           logo: https://kokorotts.net/favicon.ico
           url: https://kokorotts.net/
           description: 发现Kokoro TTS，这是开创性的AI驱动的文本转语音模型，仅具有82M参数。以无与伦比的效率实现高质量的语音合成。
@@ -519,14 +519,14 @@
           logo: https://tts.ciallo.de/image/TTS.png
           url: https://tts.ciallo.de/
           description: Ciallo TTS 是一款免费的在线文本转语音工具，支持多种声音选择，可调节语速和语调，提供即时试听和下载功能。快速将文字转换成自然流畅的语音。Ciallo TTS是免费的文本转语音工具，提供语音合成服务，支持多种语言，包括英语、法语、德语、西班牙语、阿拉伯语、中文、日语、朝鲜语、粤语、越南语等，以及多种语音风格，提供丰富的讲述人
-        - title: ' AI speaker'
+        - title: " AI speaker"
           logo: https://ai-speaker.net/public/images/favicon.ico
           url: https://ai-speaker.net/
           description: AI speaker 是一款免费的文本转语音工具，支持100多种语言和600多种AI声音,支持MP3格式下载音频文件。
         - title: VoiceCanvas
           logo: github.jpg
           url: https://github.com/ItusiAI/Open-VoiceCanvas
-          description: '支持自部署的文本转语音系统，支持声音克隆，支持50+语言，支持选择音色，代码100%开源 '
+          description: "支持自部署的文本转语音系统，支持声音克隆，支持50+语言，支持选择音色，代码100%开源 "
         - title: Dia TTS
           logo: https://diatts.cc/favicon.ico
           url: https://diatts.cc/
@@ -613,7 +613,7 @@
           logo: https://freepngzone.com/favicon.ico
           url: https://freepngzone.com/index.html
           description: 一个广泛的免费 PNG 图像库，这些图像可不受限制地用于商业用途。下载无限量的具有透明背景的高质量 PNG 文件 - 无需注册。您的免版税 PNG 图像的终极资源！
-        - title: 'Cat PNG Images '
+        - title: "Cat PNG Images "
           logo: https://catpng.net/favicon.ico
           url: https://catpng.net/
           description: 下载免费的透明 PNG 猫图片。具有透明背景的高品质猫咪图片非常适合您的设计项目。
@@ -743,7 +743,7 @@
           logo: https://aicover.design/favicon.ico
           url: https://aicover.design
           description: AI 红包封面生成器
-        - title: '壁纸样机生成器 '
+        - title: "壁纸样机生成器 "
           logo: https://www.taojuju.com/favicon.ico
           url: https://www.taojuju.com/
           description: 淘趣工坊，是一个免费的在线壁纸样机生成器，使用壁纸样机生成器快速生成 iPhone、iPad、Mac 锁屏和桌面壁纸样机图，一键下载高清图，提高效率。
@@ -771,7 +771,7 @@
           logo: https://s2.loli.net/2025/03/10/H2r8u51VztLjhoW.png
           url: https://xiaohongshu.ink/
           description: 轻松创建精美的小红书封面图，支持富文本、多图拆分、自定义背景和实时预览
-        - title: 'Cover Page '
+        - title: "Cover Page "
           logo: https://www.coverpage.one/favicon.ico
           url: https://www.coverpage.one/
           description: 免费在线封面图片制作工具，支持图片封面、纯色封面和渐变封面，轻松制作社交媒体、博客、演示文稿等多种场景的精美封面
@@ -1326,7 +1326,7 @@
         - title: Video Search
           logo: https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/87/27/69/8727691b-6902-104c-d2b3-ae271e4c12f8/AppIcon-0-0-85-220-0-4-0-2x.png/460x0w.webp
           url: https://apps.apple.com/cn/app/video-search-%E6%9C%AC%E5%9C%B0%E8%A7%86%E9%A2%91%E6%90%9C%E7%B4%A2/id6670521808?mt=12
-          description: '视频文字搜索是一款强大的视频内容检索工具，专为需要快速定位视频中特定内容的用户设计。无需联网，借助苹果原生能力纯本地实现，大小仅 2.36 MB。无论您是学生、研究人员、内容创作者还是专业人士，本应用都能大大提高您的工作效率。主要功能：1. 智能文字识别：   - 自动识别视频画面中的文字内容 '
+          description: "视频文字搜索是一款强大的视频内容检索工具，专为需要快速定位视频中特定内容的用户设计。无需联网，借助苹果原生能力纯本地实现，大小仅 2.36 MB。无论您是学生、研究人员、内容创作者还是专业人士，本应用都能大大提高您的工作效率。主要功能：1. 智能文字识别：   - 自动识别视频画面中的文字内容 "
         - title: SubtitleOCR
           logo: github.jpg
           url: https://github.com/nhjydywd/SubtitleOCR
