@@ -2,6 +2,7 @@
 // 输出全有或全无校验——任何不合规一律 null（不截断、不半采信），调用方走基线降级。
 
 import type { Env } from './types';
+import { FA_CLASS } from './icons';
 
 export interface AiResult {
   title: string;
@@ -9,6 +10,8 @@ export interface AiResult {
   taxonomy: string;
   term: string;
   newCategory: boolean;
+  // spec-27 §5：可选 icon（''=AI 未给/不合法——仅弃本字段，整条结果不降级）
+  icon: string;
 }
 
 export interface AiInput {
@@ -40,7 +43,8 @@ const systemPrompt = (categories: string[], subcategories: Record<string, string
     `列表没有合适的→提议一个简短新分类名并置 new_category=true。` +
     (subLines !== '' ? `以下分类带子分类结构（分类：子分类清单）：\n${subLines}\n` : '') +
     `所选分类在上述清单中时，term 必须给出：优先从该分类子分类中选一个，都不合适就提一个简短新子分类名；` +
-    `不在清单中（平铺/无子分类）的分类 term 给空串。`
+    `不在清单中（平铺/无子分类）的分类 term 给空串。` +
+    `可附 icon(Font Awesome 6 free 类名，如 fas fa-gamepad；new_category=true 时尽量给出)。`
   );
 };
 
@@ -57,7 +61,9 @@ function validate(raw: unknown, categories: string[]): AiResult | null {
       typeof taxonomy !== 'string' || typeof term !== 'string' || typeof newCategory !== 'boolean') return null;
   if ([...title].length > TITLE_MAX || [...description].length > DESC_MAX) return null;
   if (!categories.includes(taxonomy) && newCategory !== true) return null;
-  return { title, description, taxonomy, term, newCategory };
+  // icon 是可选附加字段：非法/缺失只置空串，不影响整条校验结论
+  const icon = typeof o.icon === 'string' && FA_CLASS.test(o.icon.trim()) ? o.icon.trim() : '';
+  return { title, description, taxonomy, term, newCategory, icon };
 }
 
 export async function aiAnalyze(

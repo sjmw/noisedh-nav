@@ -14,7 +14,7 @@ const contentOf = (c: string) => ({ choices: [{ message: { content: c } }] });
 describe('aiAnalyze', () => {
   it('合法 JSON 解析为结果', async () => {
     const r = await aiAnalyze(input, env, fakeFetch(fixture('ok')));
-    expect(r).toEqual({ title: 'CG99', description: 'CG设计资源', taxonomy: '媒体创作', term: '素材', newCategory: false } satisfies AiResult);
+    expect(r).toEqual({ title: 'CG99', description: 'CG设计资源', taxonomy: '媒体创作', term: '素材', newCategory: false, icon: '' } satisfies AiResult);
   });
   it('非 JSON / 字段缺失 / 未知分类且非 new_category → null', async () => {
     expect(await aiAnalyze(input, env, fakeFetch(fixture('bad-json')))).toBeNull();
@@ -30,7 +30,28 @@ describe('aiAnalyze', () => {
   // ---- 以下为 brief 之外的补充用例（严格校验边界 + 请求契约） ----
   it('未知分类但 new_category=true 时放行', async () => {
     const r = await aiAnalyze(input, env, fakeFetch(contentOf('{"title":"t","description":"d","taxonomy":"外星分类","term":"","new_category":true}')));
-    expect(r).toEqual({ title: 't', description: 'd', taxonomy: '外星分类', term: '', newCategory: true });
+    expect(r).toEqual({ title: 't', description: 'd', taxonomy: '外星分类', term: '', newCategory: true, icon: '' });
+  });
+  // ---- Task 6：可选 icon 字段（仅弃本字段，不弃整条结果）----
+  it('AI 附带合法 FA 类名 → icon 透传（trim 后）', async () => {
+    const r = await aiAnalyze(input, env, fakeFetch(contentOf('{"title":"t","description":"d","taxonomy":"媒体创作","term":"","new_category":false,"icon":" fas fa-gamepad "}')));
+    expect(r).toEqual({ title: 't', description: 'd', taxonomy: '媒体创作', term: '', newCategory: false, icon: 'fas fa-gamepad' });
+  });
+  it('icon 非法（非类名串）/ 类型错 / 缺失 → 仅 icon 置空串，整条结果仍有效', async () => {
+    for (const bad of ['"javascript:alert(1)"', '123', undefined]) {
+      const json = bad === undefined
+        ? '{"title":"t","description":"d","taxonomy":"媒体创作","term":"","new_category":false}'
+        : `{"title":"t","description":"d","taxonomy":"媒体创作","term":"","new_category":false,"icon":${bad}}`;
+      const r = await aiAnalyze(input, env, fakeFetch(contentOf(json)));
+      expect(r).toEqual({ title: 't', description: 'd', taxonomy: '媒体创作', term: '', newCategory: false, icon: '' });
+    }
+  });
+  it('systemPrompt 要求 icon（new_category=true 时尽量给出）', async () => {
+    const fake = vi.fn(async (_u: string | URL, _init?: RequestInit) => new Response(JSON.stringify(fixture('ok'))));
+    await aiAnalyze(input, env, fake as unknown as typeof fetch);
+    const sys = JSON.parse(fake.mock.calls[0]![1]!.body as string).messages[0].content as string;
+    expect(sys).toContain('icon');
+    expect(sys).toContain('Font Awesome');
   });
   it('term 缺失 → null；term 为空串（存在）→ 合法', async () => {
     expect(await aiAnalyze(input, env, fakeFetch(contentOf('{"title":"t","description":"d","taxonomy":"媒体创作","new_category":false}')))).toBeNull();

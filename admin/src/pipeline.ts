@@ -6,6 +6,7 @@ import { fetchPage, extractBaseline } from './extract';
 import { aiAnalyze } from './ai';
 import { categoryShapePairs, resolveCategoryShape } from './category';
 import { probeFaviconIm, extractLogo } from './logo';
+import { iconFor } from './icons';
 import { getSiteByUrl, insertSite, upsertCategory, allCategories } from './db';
 import type { AiResult } from './ai';
 import type { CategoryRow, Env, SiteRow } from './types';
@@ -59,6 +60,7 @@ export async function analyzeAndUpsert(
   let taxonomy = '';
   let term = '';
   let analyzed = false; // 直通与否的标志：logo 探测只跟随分析路径（直通保持零网络）
+  let aiIcon = ''; // AI 给的合法 icon（spec-27 §5）：只随被采纳的 aiOk 走；直通分支恒 ''（零网络不变）
   let html = '';
 
   if (eTitle !== '' && eTax !== '') {
@@ -93,6 +95,7 @@ export async function analyzeAndUpsert(
       description = trim(aiOk.description) || base.description;
       taxonomy = trim(aiOk.taxonomy);
       term = trim(aiOk.term);
+      aiIcon = aiOk.icon; // 仅随被整体采纳的 aiOk 走（validate 已保证合法或 ''）
     } else {
       // 降级：基线 + DEFAULT_TAXONOMY；页面不可达时标题退化为 host（spec §4.4）
       title = base.title || host;
@@ -122,7 +125,9 @@ export async function analyzeAndUpsert(
 
   // 最终 (taxonomy, term) 组合缺失时补 categories 行（发布导出依赖 icon）
   if (!cats.some((c: CategoryRow) => c.taxonomy === taxonomy && c.term === term)) {
-    await upsertCategory(db, { taxonomy, term });
+    // spec-27 §5 集成点 1：AI 给过合法 icon 用 AI 的；否则（含直通路径，零网络不变）纯规则表
+    const icon = aiIcon || iconFor(`${taxonomy} ${term}`);
+    await upsertCategory(db, { taxonomy, term, icon });
   }
 
   let row: SiteRow;

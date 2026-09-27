@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { analyzeAndUpsert, buildPageText } from '../src/pipeline';
 import { insertSite, updateSite, deleteSite, getSiteByUrl, listSites, allPublishedRows, allCategories, upsertCategory } from '../src/db';
 import { buildWebstackYml } from '../src/yml';
+import { iconFor } from '../src/icons';
 
 const mf = new Miniflare({ log: new Log(LogLevel.ERROR), modules: true, script: 'export default{}', d1Databases: ['DB'], d1Persist: false });
 // 环境适配（相对 brief Step1 的两处必要偏差，语义不变）：
@@ -77,7 +78,8 @@ describe('analyzeAndUpsert（AI 路径与降级细则）', () => {
     const sysMsg = parsed.messages.find((m: any) => m.role === 'system').content as string;
     expect(sysMsg).toContain('未分类'); // 之前用例已沉淀默认分类，AI 提示词内嵌现有分类清单
     const cats = await allCategories(db);
-    expect(cats).toContainEqual({ taxonomy: '工具', term: '设计', icon: 'fas fa-folder-open fa-lg', sort: 0 });
+    // Task 6 集成点 1：AI 未给 icon → 补行走规则表，iconFor('工具 设计') 先命中「设计」规则
+    expect(cats).toContainEqual({ taxonomy: '工具', term: '设计', icon: 'fas fa-palette', sort: 0 });
   });
 
   it('AI 返回纯空白 taxonomy（带 new_category）→ 整条降级为基线+DEFAULT_TAXONOMY，不半采信', async () => {
@@ -256,6 +258,49 @@ describe('analyzeAndUpsert（分类形态归一）', () => {
     const sysMsg = JSON.parse(bodies[0]!).messages.find((m: any) => m.role === 'system').content as string;
     expect(sysMsg).toContain('Union站类');
     expect(sysMsg).toContain('站点子ZIN'); // 子分类清单进 system（策略：喂结构，不喂裸分类名）
+  });
+});
+
+// ── Task 6（spec-27 §5 集成点 1）：categories 补行的 icon 决策链 ──
+describe('analyzeAndUpsert（categories 补行 icon）', () => {
+  it('AI 给合法 icon + new_category → 新建 categories 行 icon=AI 值', async () => {
+    const calls: string[] = []; const bodies: string[] = [];
+    const fetchImpl = routerFetch({
+      calls, bodies,
+      pageHtml: '<title>机器人页</title>',
+      aiContent: { title: 'AI题R', description: 'd', taxonomy: 'AI合成馆', term: '', new_category: true, icon: 'fas fa-robot' },
+    });
+    const r = await analyzeAndUpsert({ url: 'https://aicongift.cn', source: 'manual' }, aiEnv(), db, { fetchImpl });
+    expect(r.ok).toBe(true);
+    const cats = await allCategories(db);
+    expect(cats).toContainEqual({ taxonomy: 'AI合成馆', term: '', icon: 'fas fa-robot', sort: 0 });
+  });
+  it('AI 无 icon 字段 → 行 icon=iconFor(分类名)；AI icon 非法已被 validate 置空 → 同左', async () => {
+    const fetchNo = routerFetch({
+      calls: [], bodies: [],
+      pageHtml: '<title>页</title>',
+      aiContent: { title: 'T', description: 'd', taxonomy: '小游戏馆', term: '', new_category: true },
+    });
+    expect((await analyzeAndUpsert({ url: 'https://iconrule.cn', source: 'manual' }, aiEnv(), db, { fetchImpl: fetchNo })).ok).toBe(true);
+    const fetchBad = routerFetch({
+      calls: [], bodies: [],
+      pageHtml: '<title>页</title>',
+      aiContent: { title: 'T', description: 'd', taxonomy: '音乐小馆', term: '', new_category: true, icon: 'javascript:alert(1)' },
+    });
+    expect((await analyzeAndUpsert({ url: 'https://iconbad.cn', source: 'manual' }, aiEnv(), db, { fetchImpl: fetchBad })).ok).toBe(true);
+    const cats = await allCategories(db);
+    expect(cats).toContainEqual({ taxonomy: '小游戏馆', term: '', icon: iconFor('小游戏馆 '), sort: 0 });
+    expect(cats).toContainEqual({ taxonomy: '音乐小馆', term: '', icon: iconFor('音乐小馆 '), sort: 0 });
+    expect(iconFor('小游戏馆 ')).toBe('fas fa-gamepad'); // 规则表确实命中（不是巧合的默认值）
+  });
+  it('直通补行只走 iconFor 且零网络不变（即使 env 配了 AI）', async () => {
+    const calls: string[] = [];
+    const fetchImpl = (async (u: any) => { calls.push(String(u)); return new Response('must-not-be-called'); }) as unknown as typeof fetch;
+    const r = await analyzeAndUpsert({ url: 'https://pticon.cn', title: '直通题', taxonomy: '热门榜单', source: 'extension' }, aiEnv(), db, { fetchImpl });
+    expect(r.ok).toBe(true);
+    expect(calls).toEqual([]); // 直通零网络：不抓页、不调 AI、resolveIcon 也不发请求
+    const cats = await allCategories(db);
+    expect(cats).toContainEqual({ taxonomy: '热门榜单', term: '', icon: iconFor('热门榜单 '), sort: 0 });
   });
 });
 
