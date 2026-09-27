@@ -140,7 +140,7 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
 textarea { width: 100%; min-height: 140px; resize: vertical; }
 input[type="search"], input[type="file"] { min-width: 10rem; }
 
-/* 按钮三档：默认（次级）/ .primary / .btn-danger */
+/* 按钮三档：默认（次级）/ .primary / .btn-danger；Task 10 追加 .danger 两档（描边/填充） */
 .primary {
   background: var(--acc);
   border-color: var(--acc);
@@ -150,6 +150,33 @@ input[type="search"], input[type="file"] { min-width: 10rem; }
 .primary:hover:not(:disabled) { filter: brightness(1.06); border-color: var(--acc); }
 .btn-danger { color: var(--err); }
 .btn-danger:hover:not(:disabled) { border-color: var(--err); background: var(--err-soft); }
+/* .danger 描边档（工具栏批删入口）；.primary.danger 填充档（弹窗确认钮），#f1404b 走 --err 令牌 */
+button.danger { color: var(--err); border-color: var(--err); }
+button.danger:hover:not(:disabled) { background: var(--err-soft); border-color: var(--err); }
+button.primary.danger { background: var(--err); border-color: var(--err); color: #ffffff; }
+button.primary.danger:hover:not(:disabled) { filter: brightness(1.06); border-color: var(--err); }
+
+/* ---------- confirmModal（Task 10）：modalHost 挂 body，遮罩盖全站（combo 60 < 70） ---------- */
+.modal-back {
+  position: fixed; inset: 0; z-index: 70;
+  background: rgba(15, 18, 25, 0.45);
+  display: flex; align-items: center; justify-content: center;
+  padding: 1rem;
+}
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 1.1rem 1.2rem;
+  width: 26rem; max-width: 26rem;
+  display: flex; flex-direction: column; gap: .55rem;
+}
+.modal-title { margin: 0; font-size: 16px; font-weight: 700; }
+.modal-title.danger { color: var(--err); }
+.modal-line { margin: 0; color: var(--dim); font-size: 13.5px; }
+#modal-host input { width: 100%; } /* 复用全局 input 样式，仅补宽度 */
+.modal button { align-self: flex-end; min-width: 7rem; }
 
 /* ---------- 列表视图 ---------- */
 #filters { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
@@ -214,6 +241,11 @@ td input:focus, td select:focus { background: var(--surface); border-color: var(
 .col-status { width: 7.5rem; }
 .col-ops { min-width: 11rem; }
 .cell-id { color: var(--dim); }
+/* Task 10 勾选列：窄列居中；行内 checkbox 不走 td input 的 100% 宽规则 */
+.chk-col { width: 1.8rem; padding-inline: .3rem; text-align: center; }
+th.chk-col { width: 1.8rem; }
+td.chk-col { width: 1.8rem; vertical-align: middle; }
+th.chk-col input, td.chk-col input { width: auto; min-width: 0; accent-color: var(--acc); cursor: pointer; }
 
 /* 状态选择器配色：待发布=琥珀，已发布=绿 */
 .status-select { border-radius: 999px; font-weight: 600; padding-left: .6rem; }
@@ -307,6 +339,7 @@ td input:focus, td select:focus { background: var(--surface); border-color: var(
   #filters > * { width: 100%; }
   #filters #f-q { min-width: 0; }
   #publish-btn, #f-apply, #list-reload { min-height: 42px; }
+  #del-sel, #del-filter, #del-wipe { min-height: 42px; }
   #filters #f-term { max-width: none; }
   .combo-btn { min-width: 2.6rem; }
   .combo-menu { max-height: 12rem; }
@@ -333,6 +366,12 @@ td input:focus, td select:focus { background: var(--surface); border-color: var(
     padding: .55rem .7rem .7rem;
   }
   tbody tr:hover { background: var(--surface-2); }
+  /* Task 10：勾选列脱离标签流，绝对定位到卡片头行（ID 行）左角 */
+  tbody tr { position: relative; }
+  tbody td.chk-col { position: absolute; top: .75rem; left: .7rem; padding: 0; gap: 0; width: auto; min-height: 0; }
+  tbody td.chk-col::before { content: none; }
+  tbody td.chk-col input { width: 1.15rem; height: 1.15rem; min-width: 0; }
+  tbody td.cell-id { padding-left: 1.9rem; }
   tbody td {
     display: flex;
     gap: .6rem;
@@ -355,4 +394,7 @@ td input:focus, td select:focus { background: var(--surface); border-color: var(
   #pager { justify-content: space-between; }
   #page-prev, #page-next { min-height: 40px; padding-left: 1.1rem; padding-right: 1.1rem; }
   #toasts { left: .75rem; right: .75rem; bottom: .75rem; max-width: none; }
+  /* Task 10：弹窗移动端收窄；按钮给足触区 */
+  .modal { width: min(92vw, 26rem); }
+  .modal button { min-height: 42px; }
 }

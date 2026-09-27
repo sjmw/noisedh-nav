@@ -80,6 +80,32 @@ tabs.addEventListener('click', (e) => {
   if (v) showView(v);
 });
 
+// ── confirmModal（spec-27 §7）：多行删除统一弹窗；requireText 逐字解锁；零 innerHTML ──
+const modalHost = document.createElement('div'); modalHost.id = 'modal-host'; document.body.appendChild(modalHost);
+function confirmModal({ title, lines = [], danger = false, requireText = '' }) {
+  return new Promise((resolve) => {
+    modalHost.replaceChildren();
+    const back = el('div', 'modal-back');
+    const box = el('div', 'modal');
+    box.appendChild(el('h3', danger ? 'modal-title danger' : 'modal-title', title));
+    for (const l of lines) box.appendChild(el('p', 'modal-line', l));
+    let input = null;
+    if (requireText) { input = el('input'); input.type = 'text'; input.placeholder = `输入「${requireText}」解锁`; }
+    const ok = el('button', danger ? 'primary danger' : 'primary', '确认');
+    ok.disabled = !!requireText;
+    const cancel = el('button', '', '取消');
+    const close = (v) => { document.removeEventListener('keydown', onKey); modalHost.replaceChildren(); resolve(v); };
+    const onKey = (e) => { if (e.key === 'Escape') close(false); };
+    ok.onclick = () => close(true);
+    cancel.onclick = () => close(false);
+    back.onclick = (e) => { if (e.target === back) close(false); };
+    if (input) input.oninput = () => { ok.disabled = input.value !== requireText; };
+    box.append(input ?? document.createDocumentFragment(), ok, cancel);
+    back.appendChild(box); modalHost.appendChild(back); document.addEventListener('keydown', onKey);
+    (input ?? ok).focus();
+  });
+}
+
 /* ---------- 口令条 ---------- */
 async function enter() {
   const t = $('token-input').value.trim();
@@ -102,6 +128,10 @@ $('token-clear').addEventListener('click', () => { setToken(''); applyAuthedUi(f
 
 /* ---------- 列表视图 ---------- */
 const listState = { q: '', status: '', taxonomy: '', term: '', page: 1, perPage: 50, total: 0, sites: [] };
+// Task 10 删除族：勾选态（id 集合）与最近一次 loadList 命中的 total（del-filter 弹窗摘要用）。
+// loadList 开头 sel.clear()——翻页/换筛选后旧勾选不残留（防幽灵选择误删他页数据）。
+const sel = new Set();
+let lastTotal = 0;
 
 /* ---------- 分类形态缓存与组合框（2026-09-27 反馈修复轮：datalist → 自制 combobox） ----------
  * 数据源 = GET categories 的 shapes 字段（categories∪sites union 形态视图，与后端
@@ -229,6 +259,7 @@ function syncTermFilter() {
 $('f-taxonomy').addEventListener('change', syncTermFilter);
 
 async function loadList() {
+  sel.clear(); // 每次重载清空勾选：新页行重建，旧 id 不残留（Task 10）
   try {
     const p = new URLSearchParams();
     if (listState.q) p.set('q', listState.q);
@@ -239,8 +270,10 @@ async function loadList() {
     p.set('perPage', String(listState.perPage));
     const data = await api('sites?' + p.toString());
     Object.assign(listState, { total: data.total, sites: data.sites });
+    lastTotal = data.total;
     renderList();
   } catch (e) { if (e.status !== 401) toast('加载列表失败：' + e.message, { type: 'err' }); }
+  renderChecks(); // 成功/失败都同步勾选态与删除钮（失败时旧表仍在屏上，需跟随已清空的 sel）
 }
 
 function renderList() {
@@ -259,6 +292,16 @@ function renderList() {
   // 行悬停与移动端卡片规则都以 thead/tbody 为选择器锚点。
   const thead = el('thead');
   const head = el('tr');
+  // Task 10：表头勾选列由 JS 创建（不写死进 HTML），点选=全选/清空当前页
+  const chkTh = el('th', 'chk-col');
+  const chkAll = el('input');
+  chkAll.type = 'checkbox'; chkAll.id = 'chk-all'; chkAll.setAttribute('aria-label', '全选本页');
+  chkAll.onchange = () => {
+    for (const s of listState.sites) { if (chkAll.checked) sel.add(s.id); else sel.delete(s.id); }
+    renderChecks();
+  };
+  chkTh.append(chkAll);
+  head.append(chkTh);
   const cols = [['ID', 'col-id'], ['URL(原样)', ''], ['标题', ''], ['描述', ''], ['Logo', ''], ['分类', ''], ['子分类', ''], ['状态', 'col-status'], ['排序', 'col-sort'], ['来源', ''], ['操作', 'col-ops']];
   for (const [t, cls] of cols) head.append(el('th', cls, t));
   thead.append(head);
@@ -289,6 +332,12 @@ function buildRow(site) {
   tr.dataset.id = String(site.id);
   // 美化轮：td(label, cls, ...nodes) —— label 写入 data-label，供 ≤760px 卡片布局的 ::before 显示
   const td = (label, cls, ...nodes) => { const c = el('td', cls); c.dataset.label = label; c.append(...nodes); tr.append(c); return c; };
+  // Task 10：行勾选列（前置到 ID 前），data-id 与行同步；勾选即时增删 sel
+  const chk = el('input', 'row-chk');
+  chk.type = 'checkbox'; chk.dataset.id = String(site.id); chk.checked = sel.has(site.id);
+  chk.setAttribute('aria-label', `选择站点 #${site.id}`);
+  chk.onchange = () => { if (chk.checked) sel.add(site.id); else sel.delete(site.id); renderChecks(); };
+  td('', 'chk-col', chk);
   td('ID', 'cell-id', el('span', '', site.id));
   // 展示口径（Task 9/10 裁定）：url_raw || url —— 原样 URL 保真，编辑后仍显示用户输入形态
   const inUrl = fieldInput('text', site.url_raw || site.url, 'https://…');
@@ -398,6 +447,55 @@ $('page-prev').addEventListener('click', () => { if (listState.page > 1) { listS
 $('page-next').addEventListener('click', () => {
   if (listState.page * listState.perPage < listState.total) { listState.page++; loadList(); }
 });
+
+/* ---------- Task 10 删除族：勾选批删 / 按筛选全删 / 清空全库 ---------- */
+// 当前筛选是否有非空条件（后端 filter 形态要求至少一条，空条件会 400——UI 先行禁用）
+const hasFilterCond = () => ['q', 'status', 'taxonomy', 'term'].some((k) => listState[k] !== '');
+// 筛选摘要文字：del-filter 弹窗行用（与后端白名单四键一一对应）
+function filterDesc() {
+  const parts = [];
+  if (listState.q) parts.push(`关键词「${listState.q}」`);
+  if (listState.status) parts.push(`状态=${listState.status === 'published' ? '已发布' : '待发布'}`);
+  if (listState.taxonomy) parts.push(`分类「${listState.taxonomy}」`);
+  if (listState.term) parts.push(`子分类「${listState.term}」`);
+  return parts.join(' · ');
+}
+
+// 勾选态单向渲染：行/头 checkbox 跟随 sel，按钮文案与 disabled 联动（幂等，可反复调）
+function renderChecks() {
+  for (const cb of $('table-wrap').querySelectorAll('input.row-chk')) {
+    cb.checked = sel.has(Number(cb.dataset.id));
+  }
+  const chkAll = $('chk-all');
+  if (chkAll) {
+    const ids = listState.sites.map((s) => s.id);
+    chkAll.checked = ids.length > 0 && ids.every((id) => sel.has(id));
+    chkAll.indeterminate = !chkAll.checked && ids.some((id) => sel.has(id));
+  }
+  const bSel = $('del-sel');
+  bSel.textContent = `删除选中 (${sel.size})`;
+  bSel.disabled = sel.size === 0;
+  $('del-filter').disabled = !(lastTotal > 0) || !hasFilterCond();
+}
+
+async function deleteFlow(body, summaryLines, { danger = false, requireText = '' } = {}) {
+  const ok = await confirmModal({ title: '确认删除？', lines: summaryLines, danger, requireText });
+  if (!ok) return;
+  const r = await api('sites/batch-delete', { method: 'POST', body: JSON.stringify(body) });
+  toast(`已删除 ${r.deleted} 条（前台生效需再点批量发布）`); loadList(); loadTaxonomies();
+}
+$('del-sel').onclick = () => {
+  const ids = [...sel];
+  deleteFlow({ ids }, [`共 ${ids.length} 条选中站点。`]);
+};
+$('del-filter').onclick = () => {
+  // listState 含 total/sites 等非筛选键，只取后端白名单四键组 filter（空键剔除后至少一条，
+  // 由 hasFilterCond 的按钮禁用态保证，后端亦有 400 兜底）
+  const f = { q: listState.q, status: listState.status, taxonomy: listState.taxonomy, term: listState.term };
+  const filter = Object.fromEntries(Object.entries(f).filter(([, v]) => v !== ''));
+  deleteFlow({ filter }, [`当前筛选命中 ${lastTotal} 条（${filterDesc()}）。`, '分类下站点被清空后，其分类行会留在分类页（可去分类页删）。']);
+};
+$('del-wipe').onclick = () => deleteFlow({ wipe: '全部删除' }, ['将清空 D1 中全部站点行（不限筛选）。', '前台内容在下一次批量发布前不变；发布有 0 行/骤降闸兜底。'], { danger: true, requireText: '全部删除' });
 
 /* ---------- 批量发布 ---------- */
 $('publish-btn').addEventListener('click', async (btn) => {

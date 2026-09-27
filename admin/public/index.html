@@ -38,6 +38,10 @@
       <!-- 子分类筛选：选项级联于上方分类（嵌套分类才有可选子分类），admin.js 联动填充 -->
       <select id="f-term" aria-label="子分类筛选" disabled><option value="">全部子分类</option></select>
       <button id="f-apply" type="button">筛选</button>
+      <!-- Task 10 删除族：批删三形态对应 sites/batch-delete 三互斥体（ids/filter/wipe） -->
+      <button id="del-sel" type="button" disabled>删除选中 (0)</button>
+      <button id="del-filter" type="button" class="danger" disabled>按筛选全删</button>
+      <button id="del-wipe" type="button" class="danger">清空全库</button>
       <button id="publish-btn" class="primary" type="button">批量发布</button>
       <button id="list-reload" type="button" title="重新加载当前页">刷新</button>
     </div>
