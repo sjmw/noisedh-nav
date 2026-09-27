@@ -12,6 +12,7 @@ import { categoryShapePairs, resolveCategoryShape, shapeOfTaxonomy, pruneOrphanC
 import {
   listSites, getSiteById, insertSite, updateSite, deleteSite,
   allCategories, upsertCategory, deleteCategory,
+  allFriendlinks, insertFriendlink, updateFriendlink, deleteByIds,
 } from './db';
 import type { SitePatch } from './db';
 import type { Env, SiteRow } from './types';
@@ -151,6 +152,39 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
       return new Response(null, { status: 204 });
     }
     return fail('bad_request', '方法不支持');
+  }
+
+  // ── friendlinks（spec-27 §3.1）：仅非空校验，url 原样存（人工维护的字节保真数据） ──
+  if (p === '/api/admin/friendlinks' && req.method === 'GET') return json({ friendlinks: await allFriendlinks(db) });
+  if (p === '/api/admin/friendlinks' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const s = (k: string) => (typeof body?.[k] === 'string' ? (body[k] as string).trim() : undefined);
+    if (!body || !s('title') || !s('url')) return fail('bad_request', '需要 {title,url} 均非空字符串');
+    const sort = typeof body.sort === 'number' && Number.isFinite(body.sort) ? Math.trunc(body.sort) : 0;
+    const row = await insertFriendlink(db, { title: s('title')!, url: s('url')!, description: s('description') ?? '', sort });
+    return json({ friendlink: row }, 201);
+  }
+  if (p === '/api/admin/friendlinks/batch-delete' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const ids = body?.ids;
+    if (!Array.isArray(ids) || !ids.length || !ids.every((n) => Number.isInteger(n) && (n as number) > 0)) return fail('bad_request', 'ids 需为正的整数数组');
+    return json({ deleted: await deleteByIds(db, 'friendlinks', ids as number[]) });
+  }
+  const flM = /^\/api\/admin\/friendlinks\/(\d+)$/.exec(p);
+  if (flM) {
+    const id = Number(flM[1]);
+    if (req.method === 'PATCH') {
+      const body = await readJsonBody(req);
+      if (!body) return fail('bad_request', '需要 JSON 对象');
+      const patch: Record<string, unknown> = {};
+      for (const k of ['title', 'url', 'description', 'sort'] as const) if (body[k] !== undefined) patch[k] = body[k];
+      if (!Object.keys(patch).length) return fail('bad_request', '无可更新字段（白名单：title,url,description,sort）');
+      for (const k of ['title', 'url', 'description'] as const) if (patch[k] !== undefined && (typeof patch[k] !== 'string' || (k !== 'description' && !(patch[k] as string).trim()))) return fail('bad_request', `${k} 需为非空字符串`);
+      if (patch.sort !== undefined && (typeof patch.sort !== 'number' || !Number.isFinite(patch.sort))) return fail('bad_request', 'sort 需为数字');
+      const row = await updateFriendlink(db, id, patch as never);
+      return row ? json({ friendlink: row }) : jsonError('bad_request', '友链不存在', 404);
+    }
+    if (req.method === 'DELETE') { await deleteByIds(db, 'friendlinks', [id]); return new Response(null, { status: 204 }); }
   }
 
   // ── categories ──

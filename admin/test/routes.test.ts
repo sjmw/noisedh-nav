@@ -302,6 +302,69 @@ describe('publish 路由与未知路径', () => {
   });
 });
 
+// ── Task 4：/api/admin/friendlinks（spec-27 §3.1）──
+describe('/api/admin/friendlinks', () => {
+  it('POST → 201 {friendlink 含 id}；GET 列出（按 sort,id）；PATCH 改 title 生效；DELETE 204；缺行 404', async () => {
+    const a = (await getJson(await post('/api/admin/friendlinks', { title: 'A 站', url: 'https://fla.test', description: '甲', sort: 2 }))).friendlink;
+    expect(a).toMatchObject({ id: expect.any(Number), title: 'A 站', url: 'https://fla.test', description: '甲', sort: 2 });
+    expect(typeof a.created_at).toBe('string');
+    const b = (await getJson(await post('/api/admin/friendlinks', { title: 'B 站', url: 'https://flb.test', sort: 1 }))).friendlink;
+    // 全表恰为这两行（测试库经 schema.sql 初始化，friendlinks 无 seed 数据）
+    const list = (await getJson(await dev.fetch('/api/admin/friendlinks', { headers: auth }))).friendlinks;
+    expect(list.map((f: any) => f.id)).toEqual([b.id, a.id]); // sort 升序：1 在 2 前
+    // PATCH 白名单内改 title 生效，其余字段不动
+    const patched = await dev.fetch(`/api/admin/friendlinks/${a.id}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ title: 'A 改' }) });
+    expect(patched.status).toBe(200);
+    expect((await getJson(patched)).friendlink).toMatchObject({ id: a.id, title: 'A 改', url: 'https://fla.test', description: '甲', sort: 2 });
+    // PATCH 校验：白名单外键（空补丁）400、title 非字符串 400、sort 非数字 400
+    expect((await dev.fetch(`/api/admin/friendlinks/${a.id}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ zz: 1 }) })).status).toBe(400);
+    expect((await dev.fetch(`/api/admin/friendlinks/${a.id}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ title: ' ' }) })).status).toBe(400);
+    expect((await dev.fetch(`/api/admin/friendlinks/${a.id}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ sort: '2' }) })).status).toBe(400);
+    // DELETE → 204 且行消失
+    expect((await dev.fetch(`/api/admin/friendlinks/${b.id}`, { method: 'DELETE', headers: auth })).status).toBe(204);
+    const after = (await getJson(await dev.fetch('/api/admin/friendlinks', { headers: auth }))).friendlinks;
+    expect(after.map((f: any) => f.id)).toEqual([a.id]);
+    // 缺行：PATCH 不存在 id → 404 {error:bad_request}（信封口径同 sites）；DELETE 幂等仍 204
+    const missing = await dev.fetch('/api/admin/friendlinks/999999', { method: 'PATCH', headers: authJson, body: JSON.stringify({ title: 'x' }) });
+    expect(missing.status).toBe(404);
+    expect(await getJson(missing)).toMatchObject({ error: 'bad_request' });
+    expect((await dev.fetch('/api/admin/friendlinks/999999', { method: 'DELETE', headers: auth })).status).toBe(204);
+    await dev.fetch(`/api/admin/friendlinks/${a.id}`, { method: 'DELETE', headers: auth }); // 清理，表回到空
+  });
+  it('POST 校验：title/url 非空否则 400；url 不做 normalizeUrl（"/relative" 原样存）', async () => {
+    expect((await post('/api/admin/friendlinks', { url: 'https://flx.test' })).status).toBe(400); // 缺 title
+    expect((await post('/api/admin/friendlinks', { title: '  ', url: 'https://flx.test' })).status).toBe(400); // title 全空格
+    expect((await post('/api/admin/friendlinks', { title: '缺 url' })).status).toBe(400); // 缺 url
+    expect((await post('/api/admin/friendlinks', { title: '空 url', url: '  ' })).status).toBe(400); // url 全空格
+    expect((await post('/api/admin/friendlinks', { title: 123, url: 'https://flx.test' })).status).toBe(400); // title 非字符串
+    const res = await post('/api/admin/friendlinks', { title: '相对', url: '/relative' });
+    expect(res.status).toBe(201);
+    const { friendlink } = await getJson(res);
+    expect(friendlink.url).toBe('/relative'); // 字节保真：不规范化、不补协议
+    expect(friendlink.description).toBe(''); // 可选字段缺省 ''
+    expect(friendlink.sort).toBe(0); // 可选字段缺省 0
+    await dev.fetch(`/api/admin/friendlinks/${friendlink.id}`, { method: 'DELETE', headers: auth }); // 清理
+  });
+  it('batch-delete {ids} → {deleted:n}；ids 含非正整数 → 400；空数组 → 400', async () => {
+    const ids: number[] = [];
+    for (const t of ['x', 'y', 'z']) {
+      ids.push((await getJson(await post('/api/admin/friendlinks', { title: `批量${t}`, url: `https://flbd-${t}.test` }))).friendlink.id);
+    }
+    const res = await post('/api/admin/friendlinks/batch-delete', { ids: ids.slice(0, 2) });
+    expect(res.status).toBe(200);
+    expect(await getJson(res)).toEqual({ deleted: 2 });
+    const left = (await getJson(await dev.fetch('/api/admin/friendlinks', { headers: auth }))).friendlinks;
+    expect(left.map((f: any) => f.id)).toEqual([ids[2]]); // 字面量段先于 /:id 正则：POST batch-delete 不被当成 id
+    expect((await post('/api/admin/friendlinks/batch-delete', { ids: [0] })).status).toBe(400); // 非正
+    expect((await post('/api/admin/friendlinks/batch-delete', { ids: [-1] })).status).toBe(400);
+    expect((await post('/api/admin/friendlinks/batch-delete', { ids: [1.5] })).status).toBe(400); // 非整数
+    expect((await post('/api/admin/friendlinks/batch-delete', { ids: [] })).status).toBe(400); // 空数组
+    expect((await post('/api/admin/friendlinks/batch-delete', {})).status).toBe(400); // 缺 ids
+    const one = await post('/api/admin/friendlinks/batch-delete', { ids: [ids[2]] });
+    expect(await getJson(one)).toEqual({ deleted: 1 });
+  });
+});
+
 // ── 单元级：reanalyze 抛异常回滚 + 顶层错误外壳 ──
 // 集成环境（unstable_dev）里流水线没有自然抛异常的路径：.invalid 抓取走降级返回（ok:false）而非 throw，
 // 也无法在「删除之后」注入 D1 故障——故直接调用 handleAdmin，用按 SQL 前缀分派的 D1 假件驱动该分支。
