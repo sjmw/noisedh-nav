@@ -21,16 +21,18 @@ const el = (tag, cls, text) => {
 const tokenBar = $('token-bar'), tabs = $('tabs'), tokenHint = $('token-hint');
 
 /* ---------- toast ---------- */
+const TOAST_ICONS = { ok: '✓', err: '✕' };
 function toast(msg, { type = '', linkUrl = '', linkText = '查看提交', ttl = 6000 } = {}) {
   const box = el('div', 'toast' + (type ? ' ' + type : ''));
-  box.append(msg);
+  box.append(el('span', 'toast-ic', TOAST_ICONS[type] || 'ℹ'), msg); // 美化轮：状态图标（纯展示）
   if (linkUrl && /^https?:/i.test(linkUrl)) { // 只接受 http(s) 链接，防 javascript: 注入
     const a = el('a', '', ' ' + linkText + ' ↗');
     a.href = linkUrl; a.target = '_blank'; a.rel = 'noopener';
     box.append(a);
   }
   $('toasts').append(box);
-  setTimeout(() => box.remove(), ttl);
+  // 美化轮：到期先加 .hide 淡出（CSS .3s），再摘除节点；移除时机与原来同为 ttl
+  setTimeout(() => { box.classList.add('hide'); setTimeout(() => box.remove(), 320); }, ttl);
 }
 
 /* ---------- 认证 + 请求封装 ---------- */
@@ -171,18 +173,29 @@ function renderList() {
   $('page-info').textContent = `${listState.page} / ${pages}`;
   $('page-prev').disabled = listState.page <= 1;
   $('page-next').disabled = listState.page >= pages;
+  // 美化轮：列定义带宽度类（col-*），空结果给空态卡（原样返回，分页按钮状态上面已算好）
+  if (!listState.sites.length) {
+    $('table-wrap').replaceChildren(el('div', 'empty', '没有匹配的站点——换个筛选条件，或去「新增」添加一条'));
+    return;
+  }
   const table = el('table');
+  // 美化轮：显式 thead/tbody —— DOM API 构建不会自动包 tbody，而 style.css 的
+  // 行悬停与移动端卡片规则都以 thead/tbody 为选择器锚点。
+  const thead = el('thead');
   const head = el('tr');
-  for (const t of ['ID', 'URL(原样)', '标题', '描述', 'Logo', '分类', '子分类', '状态', '排序', '来源', '操作']) head.append(el('th', '', t));
-  table.append(head);
-  for (const site of listState.sites) table.append(buildRow(site));
+  const cols = [['ID', 'col-id'], ['URL(原样)', ''], ['标题', ''], ['描述', ''], ['Logo', ''], ['分类', ''], ['子分类', ''], ['状态', 'col-status'], ['排序', 'col-sort'], ['来源', ''], ['操作', 'col-ops']];
+  for (const [t, cls] of cols) head.append(el('th', cls, t));
+  thead.append(head);
+  table.append(thead);
+  const tbody = el('tbody');
+  for (const site of listState.sites) tbody.append(buildRow(site));
+  table.append(tbody);
   $('table-wrap').replaceChildren(table);
 }
 
 function actionBtn(label, fn, danger) {
-  const b = el('button', '', label);
+  const b = el('button', danger ? 'btn-danger' : '', label); // 美化轮：危险色走类（style.css），不再内联
   b.type = 'button';
-  if (danger) b.style.color = 'var(--err)';
   b.addEventListener('click', () => fn(b));
   return b;
 }
@@ -198,8 +211,9 @@ function fieldInput(type, value, ph) {
 function buildRow(site) {
   const tr = document.createElement('tr');
   tr.dataset.id = String(site.id);
-  const td = (...nodes) => { const c = el('td'); c.append(...nodes); tr.append(c); return c; };
-  td(el('span', 'dim', site.id));
+  // 美化轮：td(label, cls, ...nodes) —— label 写入 data-label，供 ≤760px 卡片布局的 ::before 显示
+  const td = (label, cls, ...nodes) => { const c = el('td', cls); c.dataset.label = label; c.append(...nodes); tr.append(c); return c; };
+  td('ID', 'cell-id', el('span', '', site.id));
   // 展示口径（Task 9/10 裁定）：url_raw || url —— 原样 URL 保真，编辑后仍显示用户输入形态
   const inUrl = fieldInput('text', site.url_raw || site.url, 'https://…');
   const inTitle = fieldInput('text', site.title);
@@ -215,11 +229,17 @@ function buildRow(site) {
   inTerm.setAttribute('list', dlTerm.id);
   bindTermLink(inTax, inTerm, dlTerm);
   const inStatus = el('select');
-  inStatus.append(new Option('待发布 pending', 'pending'), new Option('已发布 published', 'published'));
+  // 美化轮：option 文案去掉英文尾巴（value 仍是 pending/published 不变），胶囊徽标不再截断
+  inStatus.append(new Option('待发布', 'pending'), new Option('已发布', 'published'));
   inStatus.value = site.status;
-  const inSort = fieldInput('number', site.sort); inSort.style.width = '5rem';
-  td(inUrl); td(inTitle); td(inDesc); td(inLogo); td(inTax); td(inTerm, dlTerm); td(inStatus); td(inSort);
-  td(el('span', 'dim', site.source));
+  // 美化轮：状态选择器按值配色（待发布=琥珀 / 已发布=绿），纯 class 切换不改 option 与取值逻辑
+  const paintStatus = () => { inStatus.className = 'status-select ' + (inStatus.value === 'published' ? 'st-pub' : 'st-pend'); };
+  inStatus.addEventListener('change', paintStatus);
+  paintStatus();
+  const inSort = fieldInput('number', site.sort); // 美化轮：宽度交给列类 col-sort，去掉内联 5rem
+  td('URL(原样)', '', inUrl); td('标题', 'cell-title', inTitle); td('描述', '', inDesc); td('Logo', '', inLogo);
+  td('分类', '', inTax); td('子分类', '', inTerm, dlTerm); td('状态', 'col-status', inStatus); td('排序', 'col-sort', inSort);
+  td('来源', '', el('span', 'dim', site.source));
 
   const ops = el('div', 'row-ops');
   ops.append(
@@ -282,7 +302,7 @@ function buildRow(site) {
       }
     }, true),
   );
-  td(ops);
+  td('操作', 'col-ops', ops);
   return tr;
 }
 
@@ -387,7 +407,9 @@ function renderImportResult(r) {
     tr.append(c1, c2, c3);
     table.append(tr);
   }
-  box.append(table);
+  const wrap = el('div', 'scroll-x'); // el() 第三参是 textContent，节点须手动 append
+  wrap.append(table);
+  box.append(wrap); // 美化轮：手机上长 URL 横向滚动而不是撑破卡片
 }
 
 /* ---------- 新增视图 ---------- */

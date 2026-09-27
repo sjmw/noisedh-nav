@@ -4,44 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>导航站后台</title>
-<style>
-  /* 工具页：暗色最小样式，内联即可（spec §7：不追求样式，功能可键盘完成） */
-  :root { color-scheme: dark; --bg:#111417; --panel:#1a1f24; --line:#2c343c; --fg:#d8dee4; --dim:#8b949e; --acc:#4aa0e0; --ok:#3f9d5a; --warn:#c9822a; --err:#d06060; }
-  * { box-sizing: border-box; }
-  body { margin:0; padding:1rem 1.25rem 4rem; background:var(--bg); color:var(--fg); font:14px/1.6 system-ui,"PingFang SC","Microsoft YaHei",sans-serif; }
-  h1 { font-size:18px; margin:0 0 .75rem; }
-  h2 { font-size:15px; margin:1rem 0 .5rem; color:var(--dim); font-weight:600; }
-  header { border-bottom:1px solid var(--line); padding-bottom:.75rem; margin-bottom:1rem; }
-  #token-bar { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
-  #tabs { display:flex; gap:.5rem; }
-  #tabs button.on { border-color:var(--acc); color:var(--acc); }
-  button, input, select, textarea { font:inherit; color:inherit; background:var(--panel); border:1px solid var(--line); border-radius:5px; padding:.3rem .6rem; }
-  button { cursor:pointer; }
-  button:hover:not(:disabled) { border-color:var(--acc); }
-  button:disabled { opacity:.5; cursor:default; }
-  input:focus, select:focus, textarea:focus, button:focus { outline:1px solid var(--acc); outline-offset:1px; }
-  textarea { width:100%; min-height:120px; resize:vertical; }
-  table { border-collapse:collapse; width:100%; margin-top:.5rem; }
-  th, td { border:1px solid var(--line); padding:.3rem .5rem; text-align:left; vertical-align:top; }
-  th { color:var(--dim); font-weight:600; white-space:nowrap; }
-  td input, td select { width:100%; min-width:70px; }
-  .row-ops { white-space:nowrap; }
-  .row-ops button { margin:1px 2px; padding:.2rem .4rem; }
-  #filters { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
-  #pager { display:flex; gap:.5rem; align-items:center; margin-top:.5rem; }
-  #toasts { position:fixed; right:1rem; bottom:1rem; display:flex; flex-direction:column; gap:.5rem; max-width:30rem; z-index:10; }
-  .toast { background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--acc); border-radius:6px; padding:.5rem .8rem; box-shadow:0 2px 8px #0008; word-break:break-all; }
-  .toast.ok { border-left-color:var(--ok); }
-  .toast.err { border-left-color:var(--err); }
-  .toast a { color:var(--acc); }
-  .dim { color:var(--dim); }
-  .hidden { display:none !important; }
-  .stat-added { color:var(--ok); } .stat-skipped_dup { color:var(--warn); } .stat-failed { color:var(--err); }
-  code { background:var(--panel); padding:0 .3rem; border-radius:3px; }
-  section { max-width:1100px; }
-  #add-form { display:flex; gap:.5rem; }
-  #add-form input { flex:1; }
-</style>
+<!-- 样式外置 style.css（2026-09-27 美化轮，覆盖原 spec §7「不追求样式」口径）：
+     与前台主题 noisedh-nav-v2 成套——亮色默认、暗色跟随 prefers-color-scheme，≤760px 表格转卡片。
+     按「源根锚定」引用（/style.css），与 /admin.js 同机制，挂在 / 或 /admin/ 均同源直出。 -->
+<link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <header>
@@ -49,7 +15,7 @@
   <div id="token-bar">
     <label for="token-input">管理口令</label>
     <input id="token-input" type="password" autocomplete="off" placeholder="ADMIN_TOKEN">
-    <button id="token-save" type="button">进入</button>
+    <button id="token-save" class="primary" type="button">进入</button>
     <button id="token-clear" type="button" title="清除本机保存的口令">清除</button>
     <span id="token-hint" class="dim hidden">口令失效（401），请重新输入</span>
   </div>
@@ -70,7 +36,7 @@
       </select>
       <select id="f-taxonomy" aria-label="分类筛选"><option value="">全部分类</option></select>
       <button id="f-apply" type="button">筛选</button>
-      <button id="publish-btn" type="button">批量发布</button>
+      <button id="publish-btn" class="primary" type="button">批量发布</button>
       <button id="list-reload" type="button" title="重新加载当前页">刷新</button>
     </div>
     <div id="list-meta" class="dim"></div>
@@ -88,7 +54,7 @@
     <input id="import-file" type="file" accept=".html,text/html">
     <h2>或粘贴 HTML 内容</h2>
     <textarea id="import-text" placeholder="&lt;!DOCTYPE NETSCAPE-Bookmark-file-1&gt; ..."></textarea>
-    <p><button id="import-go" type="button">开始导入</button> <span id="import-busy" class="dim hidden">导入中（逐条抓取分析，可能较慢）…</span></p>
+    <p><button id="import-go" class="primary" type="button">开始导入</button> <span id="import-busy" class="dim hidden">导入中（逐条抓取分析，可能较慢）…</span></p>
     <div id="import-result"></div>
   </section>
 
@@ -100,7 +66,7 @@
       <input id="add-url" type="text" placeholder="https://example.com" autocomplete="off">
       <input id="add-taxonomy" type="text" list="dl-taxonomy" placeholder="分类（可选）" autocomplete="off">
       <input id="add-term" type="text" list="dl-term-add" placeholder="子分类（可选）" autocomplete="off">
-      <button id="add-go" type="button">添加</button>
+      <button id="add-go" class="primary" type="button">添加</button>
     </div>
     <!-- 分类选择器数据源：GET /api/admin/categories 的 shapes（union 形态视图），admin.js 填充 -->
     <datalist id="dl-taxonomy"></datalist>
