@@ -118,6 +118,6 @@
 
 **剩余事项**：
 1. 手机复冒烟 4 场景（归一/未分组/重分析/datalist）。
-2. `git push origin main`（本地 main 已 ff 合并到 `6f7863d`，会话 shell 无 GitHub 凭证，需用户终端执行）。
+2. ~~`git push origin main`~~ **已完成 2026-09-27**：远端含 3 个后台发布 commit（仅动 yml），本地 30 提交变基后快进推送，main 头 = `7127c51`。推送走 `GIT_SSH_COMMAND="ssh -i ~/.ssh/github_key -o IdentitiesOnly=yes"`（ssh config 无 github 映射，默认裸推会 publickey denied；用户终端若报 git 找不到是 PATH 缺 `/usr/bin`）。
 3. 后台界面美化——用户裁决单独一轮，未开始。
 4. SDD 工作区销账：`.superpowers/sdd/2026-09-26-cloudflare-admin/`（ledger 是权威进度记录）。
