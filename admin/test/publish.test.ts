@@ -9,7 +9,11 @@ import { Miniflare, Log, LogLevel } from 'miniflare';
 import { readFileSync } from 'node:fs';
 import { ghGet, ghPut, GithubApiError } from '../src/github';
 import { doPublish } from '../src/publish';
-import { insertSite, deleteSite, allPublishedRows, getSiteByUrl } from '../src/db';
+import {
+  insertSite, deleteSite, allPublishedRows, allPendingRows, allCategories, getSiteByUrl,
+  insertFriendlink, insertNavitem, allFriendlinks, allNavitems,
+} from '../src/db';
+import { buildWebstackYml, buildFriendlinksYml, buildNavYml } from '../src/yml';
 import type { Env } from '../src/types';
 
 // GitHub 返回的 base64 带换行（每 ~76 字符），fixture 必须复刻该形态
@@ -87,6 +91,15 @@ describe('github.ts：Contents 读写与 UTF-8 编解码', () => {
     expect((err as GithubApiError).status).toBe(401);
   });
 
+  it('ghPut：sha=null → PUT body 不含 sha 字段（Contents API 新建文件路径；Task 9 预检 404 后新建用）', async () => {
+    const { calls, fetchImpl } = mkFetch([{ body: { commit: { html_url: 'u', sha: 's' } } }]);
+    await ghPut('a/b', 'data/friendlinks.yml', '[]\n', null, 'm', 'tok', fetchImpl);
+    const body = JSON.parse(calls[0]!.body);
+    expect('sha' in body).toBe(false); // 键必须整个缺席，而非空串
+    expect(body.branch).toBe('main');
+    expect(unb64(body.content)).toBe('[]\n');
+  });
+
   it('ghGet 单次重试（spec §8）：瞬时失败（fetch 抛出/5xx）重试恰 1 次；4xx 确定性失败不重试', async () => {
     // 第 1 次抛（等价超时/断网），第 2 次成功 → 共 2 次调用且结果正确
     const { calls, fetchImpl } = mkFetch([
@@ -120,7 +133,7 @@ describe('github.ts：Contents 读写与 UTF-8 编解码', () => {
   });
 });
 
-// ── doPublish：真实 D1（miniflare，同 pipeline.test.ts）+ 脚本化假 fetch ──
+// ── doPublish：真实 D1（miniflare，同 pipeline.test.ts）+ GitHub 假实现 ──
 const mf = new Miniflare({ log: new Log(LogLevel.ERROR), modules: true, script: 'export default{}', d1Databases: ['DB'], d1Persist: false });
 let db: any;
 beforeAll(async () => {
@@ -129,140 +142,276 @@ beforeAll(async () => {
 });
 afterAll(async () => { await mf.dispose(); });
 
+// ── doPublish：真实 D1（miniflare，同 pipeline.test.ts）+ 按 path 路由的假 GitHub ──
+// Task 9 三文件化后预检是三路并行 GET，调用次序受微任务调度影响不再恒定——
+// 假实现放弃「按次序消费脚本」，改为维护 path → {sha,text} 的远端虚拟仓库，GET/PUT 按 path 分发。
+const WS = 'data/webstack.yml';
+const FLP = 'data/friendlinks.yml';
+const NVP = 'data/headers.yml';
+
+interface PutScript { status?: number; conflictTo?: 'sent' | string } // conflictTo：409 时把远端改成…（'sent'=本次将写内容，模拟并发推入相同字节）
+interface GHOpts {
+  initial?: Partial<Record<string, string | null>>; // 缺省/null = 远端不存在该 path（GET 404）
+  putScripts?: Partial<Record<string, PutScript[]>>; // 按 path 的 PUT 覆盖脚本（ FIFO），无脚本则默认成功
+  getThrows?: Partial<Record<string, number>>; // 该 path 前 N 次 GET 直接抛（模拟超时/断网，喂 ghGet 单次重试）
+}
+const mkGH = (opts: GHOpts = {}) => {
+  const calls: Rec[] = [];
+  const remote = new Map<string, { sha: string; text: string }>();
+  for (const [p, t] of Object.entries(opts.initial ?? {})) {
+    if (typeof t === 'string') remote.set(p, { sha: `sha-${p}-init`, text: t });
+  }
+  const scripts = new Map<string, PutScript[]>();
+  for (const [p, list] of Object.entries(opts.putScripts ?? {})) if (list) scripts.set(p, list);
+  const throws: Record<string, number> = {};
+  for (const [p, n] of Object.entries(opts.getThrows ?? {})) if (n) throws[p] = n;
+  let putSeq = 0;
+  const jsonRes = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  const fetchImpl = (async (url: unknown, init?: RequestInit) => {
+    const rec: Rec = {
+      url: String(url),
+      method: String((init as { method?: string })?.method ?? 'GET'),
+      headers: Object.fromEntries(new Headers((init as { headers?: HeadersInit })?.headers).entries()),
+      body: String((init as { body?: string })?.body ?? ''),
+    };
+    calls.push(rec);
+    const path = rec.url.split('/contents/')[1]!.split('?')[0]!;
+    if (rec.method === 'GET') {
+      if ((throws[path] ?? 0) > 0) { throws[path]!--; throw new Error('模拟 TimeoutError（AbortSignal.timeout）'); }
+      const st = remote.get(path);
+      if (!st) return jsonRes({ message: 'Not Found' }, 404);
+      return jsonRes({ content: wrap(b64(st.text)), sha: st.sha });
+    }
+    const body = JSON.parse(rec.body);
+    const sc = (scripts.get(path) ?? []).shift();
+    if (sc?.status) {
+      if (sc.conflictTo === 'sent') remote.set(path, { sha: `sha-${path}-race`, text: unb64(body.content) });
+      else if (typeof sc.conflictTo === 'string') remote.set(path, { sha: `sha-${path}-race`, text: sc.conflictTo });
+      return jsonRes({ message: 'failed to update ref', documentation_url: 'https://docs.github.com/rest' }, sc.status);
+    }
+    putSeq++;
+    remote.set(path, { sha: `sha-${path}-put${putSeq}`, text: unb64(body.content) });
+    return jsonRes({ commit: { html_url: `https://github.com/sjmw/noisedh-nav/commit/c${putSeq}`, sha: `c${putSeq}` } });
+  }) as unknown as typeof fetch;
+  const putsTo = (p: string) => calls.filter((c) => c.method === 'PUT' && c.url.includes(`/contents/${p}`));
+  const putBodies = () => calls
+    .filter((c) => c.method === 'PUT')
+    .map((c) => { const b = JSON.parse(c.body); return { path: c.url.split('/contents/')[1]!, body: b, content: unb64(b.content) as string }; });
+  return { calls, fetchImpl, remote, putsTo, putBodies };
+};
+
 const mkEnv = (extra: Partial<Env> = {}): Env =>
   ({ ADMIN_TOKEN: 't', GITHUB_TOKEN: 'ghtok', DEFAULT_TAXONOMY: '未分类', FAVICON_TEMPLATE: '', REPO: 'sjmw/noisedh-nav', DB: db, ...extra }) as unknown as Env;
-
-const okGet = (sha: string): Reply => ({ body: { content: wrap(b64('---\n')), sha } });
-const okPut = (n = 1): Reply[] => Array.from({ length: n }, (_, i) => ({ body: { commit: { html_url: `https://github.com/sjmw/noisedh-nav/commit/c${i}`, sha: `c${i}` } } }));
 
 const seed = async (url: string, status: 'pending' | 'published', title = '频道页面站', taxonomy = '频道页面') =>
   insertSite(db, { url, url_raw: url, title, description: '', logo: '', taxonomy, term: '', status, source: 'manual', sort: 0 });
 
-describe('doPublish（发布即快照 + 冲突中止）', () => {
-  it('成功路径：GET→PUT 各恰一次；PUT 内容含 pending 行（快照）；count=写后 published 总数；成功后 pending→published', async () => {
-    await seed('https://pub-a.test/', 'published', '已发频道A');
-    await seed('https://pend-a.test/', 'pending', '待审频道B');
-    const beforePublished = (await allPublishedRows(db)).length;
-    const { calls, fetchImpl } = mkFetch([okGet('sha-9'), okPut()[0]!]);
-    const r = await doPublish(mkEnv(), db, fetchImpl);
-    expect(r).toMatchObject({ ok: true, commitUrl: 'https://github.com/sjmw/noisedh-nav/commit/c0', count: beforePublished + 1 });
-    expect(calls).toHaveLength(2); // 恰一次 GET + 一次 PUT
-    expect(calls[1]!.method).toBe('PUT');
-    expect(calls[1]!.url).toContain('repos/sjmw/noisedh-nav/contents/data/webstack.yml');
-    expect(calls[1]!.headers.authorization).toBe('Bearer ghtok');
-    const body = JSON.parse(calls[1]!.body);
-    expect(body.branch).toBe('main');
-    expect(body.sha).toBe('sha-9');
-    const written = unb64(body.content);
-    expect(written).toContain('已发频道A');
-    expect(written).toContain('待审频道B'); // 发布即快照：pending 随本次 publish 进入 yml
-    expect(written).toContain('频道页面');
-    expect(body.message).toMatch(/^后台发布：\d+ 条站点（\d+ 条新增）$/);
-    const row = await getSiteByUrl(db, 'https://pend-a.test/');
-    expect(row?.status).toBe('published'); // 成功后状态回写
+// 独立重算「本次应写三文件」的字节（与 doPublish 的快照构建同纪律但各算各的，用于 skip 基线与 PUT 内容断言）
+const expectedFiles = async (d: D1Database): Promise<{ ws: string; fl: string; nv: string }> => {
+  const [published, pending, categories, flinks, navs] = await Promise.all([
+    allPublishedRows(d), allPendingRows(d), allCategories(d), allFriendlinks(d), allNavitems(d),
+  ]);
+  const snapshot = [...published, ...pending.map((r) => ({ ...r, status: 'published' }))];
+  return {
+    ws: buildWebstackYml(snapshot, categories),
+    fl: buildFriendlinksYml(flinks),
+    nv: buildNavYml(navs),
+  };
+};
+
+describe('doPublish（三文件发布：并行预检—幂等 skip—逐文件 PUT—冲突收敛）', () => {
+  it('三文件全等 → 零 PUT、files 全 skip、pending 照常翻转（幂等短接的三文件版）', async () => {
+    await seed('https://t0-pub.test/', 'published', 'T0已发站');
+    await seed('https://t0-pend.test/', 'pending', 'T0待发站');
+    const exp = await expectedFiles(db);
+    const gh = mkGH({ initial: { [WS]: exp.ws, [FLP]: exp.fl, [NVP]: exp.nv } });
+    const r = await doPublish(mkEnv(), db, gh.fetchImpl);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.files).toEqual([
+        { path: WS, action: 'skip' }, { path: FLP, action: 'skip' }, { path: NVP, action: 'skip' },
+      ]);
+      expect(r.commitUrl).toBe('https://github.com/sjmw/noisedh-nav/blob/main/data/webstack.yml'); // 无新 commit 的兜底形状不变
+      expect(r.friendlinks).toBe((await allFriendlinks(db)).length);
+      expect(r.navitems).toBe((await allNavitems(db)).length);
+    }
+    expect(gh.calls.map((c) => c.method)).toEqual(['GET', 'GET', 'GET']); // 三路预检，零 PUT
+    expect((await getSiteByUrl(db, 'https://t0-pend.test/'))?.status).toBe('published'); // 全 skip 也翻转（发布即快照）
   });
 
-  it('409 → 重 GET 内容有非本次发布差异 → github_conflict；PUT 全程恰 1 次；pending 不动', async () => {
-    await seed('https://pend-b.test/', 'pending', '待审频道C');
-    const { calls, fetchImpl } = mkFetch([
-      okGet('sha-stale'),
-      { status: 409, body: { message: 'failed to update ref', documentation_url: 'https://docs.github.com/rest' } },
-      { body: { content: wrap(b64('---\n- taxonomy: 别人改的\n  links:\n    - title: 外来改动\n      url: https://intruder.test\n')), sha: 'sha-new' } },
-    ]);
-    const r = await doPublish(mkEnv(), db, fetchImpl);
+  it('仅 webstack 变 → 只 PUT webstack.yml 一次；PUT 内容=含 pending 的快照字节；message 站点数格式不变', async () => {
+    await seed('https://t1-pend.test/', 'pending', 'T1待发站');
+    const exp = await expectedFiles(db);
+    expect(exp.ws).toContain('T1待发站'); // 发布即快照：pending 进 webstack
+    expect(exp.ws).toContain('T0已发站');
+    const gh = mkGH({ initial: { [WS]: remoteYml(2), [FLP]: exp.fl, [NVP]: exp.nv } });
+    const r = await doPublish(mkEnv(), db, gh.fetchImpl);
+    expect(r.ok).toBe(true);
+    const bodies = gh.putBodies();
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]!.path).toBe(WS);
+    expect(bodies[0]!.content).toBe(exp.ws);
+    expect(bodies[0]!.body.branch).toBe('main');
+    expect(bodies[0]!.body.sha).toBe(`sha-${WS}-init`); // 预检 sha 透传（乐观锁）
+    expect(bodies[0]!.body.message).toMatch(/^后台发布：\d+ 条站点（\d+ 条新增）$/);
+    if (r.ok) {
+      expect(r.files).toEqual([
+        { path: WS, action: 'put' }, { path: FLP, action: 'skip' }, { path: NVP, action: 'skip' },
+      ]);
+      expect(r.commitUrl).toBe('https://github.com/sjmw/noisedh-nav/commit/c1');
+      expect(r.count).toBe((await allPublishedRows(db)).length); // 翻转后 published 总数 = 快照数
+    }
+    expect((await getSiteByUrl(db, 'https://t1-pend.test/'))?.status).toBe('published');
+  });
+
+  it('仅 friendlinks 变 → 只 PUT friendlinks.yml（webstack/headers skip）；空表首推 + 独立计数字段', async () => {
+    await insertFriendlink(db, { title: '友情链接一', url: 'https://fl-one.test', description: '示例友链', sort: 0 });
+    await insertFriendlink(db, { title: '友情链接二', url: 'https://fl-two.test', description: '', sort: 1 });
+    const parent = await insertNavitem(db, { item: '更多', icon: 'fas fa-ellipsis', link: '', parent_id: null, sort: 9 });
+    await insertNavitem(db, { item: '子项甲', icon: '', link: 'https://kid-a.test', parent_id: parent.id, sort: 0 });
+    const exp = await expectedFiles(db);
+    expect(exp.fl).toContain('友情链接一');
+    expect(exp.nv).toContain('子项甲'); // headers 已有真实内容作 skip 基线
+    const gh = mkGH({ initial: { [WS]: exp.ws, [FLP]: '[]\n', [NVP]: exp.nv } });
+    const r = await doPublish(mkEnv(), db, gh.fetchImpl);
+    expect(r.ok).toBe(true);
+    const bodies = gh.putBodies();
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]!.path).toBe(FLP);
+    expect(bodies[0]!.content).toBe(exp.fl);
+    expect(bodies[0]!.body.message).toMatch(/^后台发布：友情链接 \d+ 条$/);
+    if (r.ok) {
+      expect(r.files).toEqual([
+        { path: WS, action: 'skip' }, { path: FLP, action: 'put' }, { path: NVP, action: 'skip' },
+      ]);
+      expect(r.friendlinks).toBe(2);
+      expect(r.navitems).toBe(2);
+    }
+  });
+
+  it('预检 404（三份远端都不存在）→ 新建式 PUT：body 不含 sha 键，三文件全 put', async () => {
+    const exp = await expectedFiles(db);
+    const gh = mkGH(); // 无 initial → 三路 GET 全 404
+    const r = await doPublish(mkEnv(), db, gh.fetchImpl);
+    expect(r.ok).toBe(true);
+    const bodies = gh.putBodies();
+    expect(bodies.map((b) => b.path)).toEqual([WS, FLP, NVP]); // 预检后按 webstack→friendlinks→headers 序写
+    for (const b of bodies) expect('sha' in b.body).toBe(false); // 新建：sha 键整个缺席（ghPut sha 可空）
+    expect(bodies[0]!.content).toBe(exp.ws);
+    expect(bodies[1]!.content).toBe(exp.fl);
+    expect(bodies[2]!.content).toBe(exp.nv);
+    if (r.ok) expect(r.files.map((f) => f.action)).toEqual(['put', 'put', 'put']);
+  });
+
+  it('中途 409 对账不等：webstack PUT 成功后 friendlinks 409 → github_conflict；「1 个文件已更新」；headers 不再 PUT；pending 不翻转', async () => {
+    await seed('https://t4-pend.test/', 'pending', 'T4待发站');
+    const diverged = '- title: 外来友链\n  url: https://intruder.test\n';
+    const gh = mkGH({
+      initial: { [WS]: remoteYml(2), [FLP]: '[]\n', [NVP]: '[]\n' }, // 三份都有差异 → 本应逐份 PUT
+      putScripts: { [FLP]: [{ status: 409, conflictTo: diverged }] },
+    });
+    const r = await doPublish(mkEnv(), db, gh.fetchImpl);
     expect(r).toMatchObject({ ok: false, code: 'github_conflict' });
-    expect(calls.map((c) => c.method)).toEqual(['GET', 'PUT', 'GET']); // 无第二次 PUT
-    expect((await getSiteByUrl(db, 'https://pend-b.test/'))?.status).toBe('pending');
+    const msg = String((r as { message?: string }).message);
+    expect(msg).toContain('发布中止于 data/friendlinks.yml');
+    expect(msg).toContain('1 个文件已更新');
+    expect(msg).toContain('2 个未更新');
+    expect(msg).toContain('重试'); // 部分成功必须给出收敛指引（重发布幂等）
+    expect(gh.putsTo(WS)).toHaveLength(1);
+    expect(gh.putsTo(FLP)).toHaveLength(1); // 409 后只补对账 GET，绝不二次 PUT
+    expect(gh.putsTo(NVP)).toHaveLength(0); // 中止剩余文件的 PUT
+    expect((await getSiteByUrl(db, 'https://t4-pend.test/'))?.status).toBe('pending'); // 部分成功绝不翻转
   });
 
-  it('409 → 重 GET 内容 = 本次将写内容 → 幂等成功；pending 照常翻转；仍无第二次 PUT', async () => {
-    await seed('https://pend-c.test/', 'pending', '待审频道D');
-    const echo: Reply[] = [
-      okGet('sha-x'),
-      { status: 409, body: { message: 'update-ref failed', documentation_url: 'x' } },
-      // 远端已被并发推成与本次完全相同的内容：回显 PUT body 的 content
-      (call) => ({ body: { content: wrap(JSON.parse(calls[1]!.body).content), sha: 'sha-z' } }),
-    ];
-    const { calls, fetchImpl } = mkFetch(echo);
-    const r = await doPublish(mkEnv(), db, fetchImpl);
+  it('409 对账相等 → 视为 skip 继续：余下 headers 照常 PUT、整体成功、pending 翻转、无第二次 PUT', async () => {
+    await seed('https://t5-pend.test/', 'pending', 'T5待发站');
+    const gh = mkGH({
+      initial: { [WS]: remoteYml(2), [FLP]: '[]\n', [NVP]: '[]\n' },
+      putScripts: { [FLP]: [{ status: 409, conflictTo: 'sent' }] }, // 并发者抢先推入与本次逐字节相同的内容
+    });
+    const r = await doPublish(mkEnv(), db, gh.fetchImpl);
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.commitUrl).toContain('github.com/sjmw/noisedh-nav');
-    expect(calls.map((c) => c.method)).toEqual(['GET', 'PUT', 'GET']);
-    expect((await getSiteByUrl(db, 'https://pend-c.test/'))?.status).toBe('published');
+    if (r.ok) {
+      expect(r.files).toEqual([
+        { path: WS, action: 'put' }, { path: FLP, action: 'skip' }, { path: NVP, action: 'put' },
+      ]);
+      expect(r.commitUrl).toBe('https://github.com/sjmw/noisedh-nav/commit/c2'); // 最后一个新 commit（FL 未产生 commit 不计）
+    }
+    expect(gh.putsTo(FLP)).toHaveLength(1); // 仍无第二次 PUT
+    expect((await getSiteByUrl(db, 'https://t5-pend.test/'))?.status).toBe('published');
   });
 
-  it('远端 = 本次将写内容 → 幂等短接：恰一次 GET、零 PUT，成功且 pending 照常翻转（干跑二遍不产生空 commit）', async () => {
-    await seed('https://noop-a.test/', 'published', '幂等已发G');
-    await seed('https://noop-b.test/', 'pending', '幂等待审H');
-    // 第一遍：正常发布，从 PUT body 捕获本次写入的精确文本
-    const { calls: c1, fetchImpl: f1 } = mkFetch([okGet('sha-n1'), okPut()[0]!]);
-    const r1 = await doPublish(mkEnv(), db, f1);
-    expect(r1.ok).toBe(true);
-    const written = unb64(JSON.parse(c1[1]!.body).content);
-    // 人为把 noop-b 拨回 pending：快照文本不变（发布即快照本就含它），但短接路径确有 pending 可翻
-    await db.prepare('UPDATE sites SET status = ? WHERE url = ?').bind('pending', 'https://noop-b.test/').run();
-    // 第二遍：远端原样回显刚写入的内容 → 只 GET，绝不 PUT
-    const { calls: c2, fetchImpl: f2 } = mkFetch([{ body: { content: wrap(b64(written)), sha: 'sha-n2' } }]);
-    const r2 = await doPublish(mkEnv(), db, f2);
-    expect(r2).toMatchObject({ ok: true, commitUrl: 'https://github.com/sjmw/noisedh-nav/blob/main/data/webstack.yml' });
-    expect(c2.map((c) => c.method)).toEqual(['GET']);
-    expect((await getSiteByUrl(db, 'https://noop-b.test/'))?.status).toBe('published'); // 短接路径也翻转 pending
+  it('webstack 首文件即 409 对账不等 → github_conflict（0 个已更新）；后续文件零 PUT；pending 不动', async () => {
+    await seed('https://t6-pend.test/', 'pending', 'T6待发站');
+    const exp = await expectedFiles(db);
+    const gh = mkGH({
+      initial: { [WS]: exp.ws + '# 别人加的注释\n', [FLP]: exp.fl, [NVP]: exp.nv },
+      putScripts: { [WS]: [{ status: 409, conflictTo: remoteYml(1) }] },
+    });
+    const r = await doPublish(mkEnv(), db, gh.fetchImpl);
+    expect(r).toMatchObject({ ok: false, code: 'github_conflict' });
+    const msg = String((r as { message?: string }).message);
+    expect(msg).toContain('0 个文件已更新');
+    expect(msg).toContain('3 个未更新'); // 中止于首文件：三份都未落（含中止的那份）
+    expect(gh.calls.filter((c) => c.method === 'PUT')).toHaveLength(1); // 中止后 FL/NV 不再尝试
+    expect((await getSiteByUrl(db, 'https://t6-pend.test/'))?.status).toBe('pending');
   });
 
-  it('GitHub 写失败（非 409，HTTP 500）→ fetch_failed；pending 完全不动', async () => {    await seed('https://pend-d.test/', 'pending', '待审频道E');
-    const { calls, fetchImpl } = mkFetch([okGet('sha-e'), { status: 500, body: { message: 'backend error' } }]);
-    const r = await doPublish(mkEnv(), db, fetchImpl);
+  it('GitHub 写失败（非 409，HTTP 500）→ fetch_failed；失败即停不重试；pending 完全不动', async () => {
+    await seed('https://t7-pend.test/', 'pending', 'T7待发站');
+    const exp = await expectedFiles(db);
+    const gh = mkGH({ initial: { [WS]: remoteYml(2), [FLP]: exp.fl, [NVP]: exp.nv }, putScripts: { [WS]: [{ status: 500 }] } });
+    const r = await doPublish(mkEnv(), db, gh.fetchImpl);
     expect(r).toMatchObject({ ok: false, code: 'fetch_failed' });
-    expect(calls).toHaveLength(2); // 失败后不再 GET/PUT（不重试）
-    expect((await getSiteByUrl(db, 'https://pend-d.test/'))?.status).toBe('pending');
+    expect(gh.calls.filter((c) => c.method === 'PUT')).toHaveLength(1); // §5.4 at-most-once：写失败不重试也不续写
+    expect((await getSiteByUrl(db, 'https://t7-pend.test/'))?.status).toBe('pending');
   });
 
-  it('首 GET 抛（超时/断网）→ ghGet 重试后发布照常成功；PUT 仍恰 1 次（重试只护幂等 GET，不碰 §5.4 姿态）', async () => {
-    await seed('https://pend-retry.test/', 'pending', '重试频道F');
-    const { calls, fetchImpl } = mkFetch([
-      () => { throw new Error('模拟 TimeoutError'); }, // 第 1 次 GET 抛
-      okGet('sha-r'),                                  // ghGet 单次重试命中
-      okPut()[0]!,
-    ]);
-    const r = await doPublish(mkEnv(), db, fetchImpl);
+  it('首文件 GET 抛（超时/断网）→ ghGet 单次重试后照常发布；每文件 PUT 至多 1 次', async () => {
+    await seed('https://t8-pend.test/', 'pending', 'T8待发站');
+    const gh = mkGH({ initial: { [WS]: remoteYml(2), [FLP]: '[]\n', [NVP]: '[]\n' }, getThrows: { [WS]: 1 } });
+    const r = await doPublish(mkEnv(), db, gh.fetchImpl);
     expect(r.ok).toBe(true);
-    expect(calls.map((c) => c.method)).toEqual(['GET', 'GET', 'PUT']);
-    expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(1);
-    expect((await getSiteByUrl(db, 'https://pend-retry.test/'))?.status).toBe('published');
+    expect(gh.calls.filter((c) => c.method === 'GET' && c.url.includes(`/contents/${WS}`))).toHaveLength(2); // 抛出 1 次 + 重试 1 次
+    expect(gh.calls.filter((c) => c.method === 'GET')).toHaveLength(4); // 3 路预检 + 1 次重试
+    expect(gh.putBodies().map((b) => b.path)).toEqual([WS, FLP, NVP]); // 三路都变 → 各 PUT 恰一次
+    if (r.ok) expect(r.files.map((f) => f.action)).toEqual(['put', 'put', 'put']);
+    expect((await getSiteByUrl(db, 'https://t8-pend.test/'))?.status).toBe('published');
   });
 
   it('缺 GITHUB_TOKEN → fetch_failed 且零网络调用；REPO 未配置 → 落默认 sjmw/noisedh-nav', async () => {
-    const empty = mkFetch([]);
+    const empty = mkGH();
     const r = await doPublish(mkEnv({ GITHUB_TOKEN: '' as string }), db, empty.fetchImpl);
     expect(r).toMatchObject({ ok: false, code: 'fetch_failed' });
     expect(empty.calls).toHaveLength(0);
-    const { calls, fetchImpl } = mkFetch([okGet('sha-f'), okPut()[0]!]);
-    const r2 = await doPublish(mkEnv({ REPO: undefined as unknown as string }), db, fetchImpl);
+    const gh = mkGH();
+    const r2 = await doPublish(mkEnv({ REPO: undefined as unknown as string }), db, gh.fetchImpl);
     expect(r2.ok).toBe(true);
-    expect(calls[1]!.url).toContain('repos/sjmw/noisedh-nav/contents/data/webstack.yml');
+    expect(gh.calls.some((c) => c.url.includes('repos/sjmw/noisedh-nav/contents/data/webstack.yml'))).toBe(true);
   });
 
   it('mixed taxonomy（同分类空/非空 term 混用）→ bad_request，零网络调用，pending 不动', async () => {
     const p1 = await seed('https://mix-a.test/', 'pending', '混A', '混用类');
     const p2 = await seed('https://mix-b.test/', 'pending', '混B', '混用类');
     await insertSite(db, { url: 'https://mix-c.test/', url_raw: 'https://mix-c.test/', title: '混C', description: '', logo: '', taxonomy: '混用类', term: '子项', status: 'pending', source: 'manual', sort: 0 });
-    const { calls, fetchImpl } = mkFetch([]);
-    const r = await doPublish(mkEnv(), db, fetchImpl);
+    const gh = mkGH();
+    const r = await doPublish(mkEnv(), db, gh.fetchImpl);
     expect(r).toMatchObject({ ok: false, code: 'bad_request' });
-    expect(calls).toHaveLength(0);
+    expect(gh.calls).toHaveLength(0);
     for (const id of [p1.id, p2.id]) await deleteSite(db, id); // 清理，避免污染其它用例的全量快照
     await deleteSite(db, (await getSiteByUrl(db, 'https://mix-c.test/'))!.id);
   });
 });
 
-// ── Fix 3：空库闸 + 骤降闸（独立空库，避免与上方累积共享快照互相干扰）──
+// ── 空库闸 + 骤降闸（独立空库，避免与上方累积共享快照互相干扰）──
+// 两闸只对 data/webstack.yml 生效（binding ruling：friendlinks/headers 空表 → '[]\n' 是合法发布，R1 三文件后台单写）
 const mfGate = new Miniflare({ log: new Log(LogLevel.ERROR), modules: true, script: 'export default{}', d1Databases: ['DB'], d1Persist: false });
 let gdb: any;
 
 // 远端假文件：n 条链接条目（buildWebstackYml 同款 `- title:` 行形态，供行计数正则粗计）
 const remoteYml = (n: number): string =>
   '---\n' + Array.from({ length: n }, (_, i) => `- title: 远端站${i}\n  url: https://remote${i}.invalid\n`).join('');
-const remoteGet = (n: number, sha = 'sha-remote'): Reply => ({ body: { content: wrap(b64(remoteYml(n))), sha } });
 
 const gateSeed = async (n: number): Promise<void> => {
   for (let i = 0; i < n; i++)
@@ -270,52 +419,65 @@ const gateSeed = async (n: number): Promise<void> => {
 };
 const gateClear = async (): Promise<void> => { await gdb.prepare('DELETE FROM sites').run(); await gdb.prepare('DELETE FROM categories').run(); };
 
-describe('doPublish 保护闸（空库 + 50% 骤降，终局评审 Important #1）', () => {
+// gate 库 friendlinks/navitems 恒空 → 两文件基线 '[]\n'（skip 掉，PUT 计数只反映 webstack）
+const gateInitial = (ws: string): Record<string, string> => ({ [WS]: ws, [FLP]: '[]\n', [NVP]: '[]\n' });
+
+describe('doPublish 保护闸（空库 + 50% 骤降，只对 webstack 快照生效）', () => {
   beforeAll(async () => {
     gdb = await mfGate.getD1Database('DB');
     await gdb.exec(readFileSync('schema.sql', 'utf8').replace(/--.*$/gm, '').replace(/\s+/g, ' '));
   });
   afterAll(async () => { await mfGate.dispose(); });
 
-  it('空库（0 行）→ bad_request 拒绝且 GitHub 零请求', async () => {
+  it('空库（0 行）→ bad_request 拒绝且 GitHub 零请求（webstack 0 行 = 整体拒绝，三文件一份都不写）', async () => {
     await gateClear();
-    const { calls, fetchImpl } = mkFetch([]);
-    const r = await doPublish(mkEnv({ DB: gdb }), gdb, fetchImpl);
+    const gh = mkGH();
+    const r = await doPublish(mkEnv({ DB: gdb }), gdb, gh.fetchImpl);
     expect(r).toMatchObject({ ok: false, code: 'bad_request' });
     expect(String((r as { message?: string }).message)).toContain('没有任何站点');
-    expect(calls).toHaveLength(0); // 闸在 ghGet 之前：不烧任何 GitHub 请求
+    expect(gh.calls).toHaveLength(0); // 闸在预检 GET 之前：不烧任何 GitHub 请求
   });
 
-  it('骤降闸：远端 100 条、快照 40 条 → 拒绝（消息含两数），PUT 零次，行不翻转', async () => {
+  it('骤降闸：远端 webstack 100 条、快照 40 条 → 拒绝（消息含两数），PUT 零次，行不翻转', async () => {
     await gateClear();
     await gateSeed(40);
-    const { calls, fetchImpl } = mkFetch([remoteGet(100)]);
-    const r = await doPublish(mkEnv({ DB: gdb }), gdb, fetchImpl);
+    const gh = mkGH({ initial: gateInitial(remoteYml(100)) });
+    const r = await doPublish(mkEnv({ DB: gdb }), gdb, gh.fetchImpl);
     expect(r).toMatchObject({ ok: false, code: 'bad_request' });
     const msg = String((r as { message?: string }).message);
     expect(msg).toContain('40');
     expect(msg).toContain('100');
-    expect(calls.map((c) => c.method)).toEqual(['GET']); // 只 GET 对账，绝不 PUT
+    expect(gh.calls.filter((c) => c.method === 'PUT')).toHaveLength(0); // 闸在 i===0：任何文件都不 PUT
+    expect(gh.calls.filter((c) => c.method === 'GET')).toHaveLength(3); // 三路并行预检已发生
     const rows = await allPublishedRows(gdb);
     expect(rows).toHaveLength(0); // 发布即快照的翻转未发生
   });
 
-  it('远端 100 条、快照 60 条 → 放行（未破 50% 线），GET→PUT 各恰一次', async () => {
+  it('远端 100 条、快照 60 条 → 放行（未破 50% 线），webstack 恰一次 PUT，两新文件 skip', async () => {
     await gateClear();
     await gateSeed(60);
-    const { calls, fetchImpl } = mkFetch([remoteGet(100, 'sha-ok'), okPut()[0]!]);
-    const r = await doPublish(mkEnv({ DB: gdb }), gdb, fetchImpl);
-    expect(r).toMatchObject({ ok: true, count: 60 });
-    expect(calls.map((c) => c.method)).toEqual(['GET', 'PUT']);
+    const gh = mkGH({ initial: gateInitial(remoteYml(100)) });
+    const r = await doPublish(mkEnv({ DB: gdb }), gdb, gh.fetchImpl);
+    expect(r).toMatchObject({ ok: true, count: 60, friendlinks: 0, navitems: 0 });
+    expect(gh.putBodies().map((b) => b.path)).toEqual([WS]);
   });
 
   it('远端仅 3 条、快照 1 条 → 放行（远端低于 20 条阈值不触发骤降闸）', async () => {
     await gateClear();
     await gateSeed(1);
-    const { calls, fetchImpl } = mkFetch([remoteGet(3, 'sha-small'), okPut()[0]!]);
-    const r = await doPublish(mkEnv({ DB: gdb }), gdb, fetchImpl);
+    const gh = mkGH({ initial: gateInitial(remoteYml(3)) });
+    const r = await doPublish(mkEnv({ DB: gdb }), gdb, gh.fetchImpl);
     expect(r).toMatchObject({ ok: true, count: 1 });
-    expect(calls.map((c) => c.method)).toEqual(['GET', 'PUT']);
+    expect(gh.putBodies().map((b) => b.path)).toEqual([WS]);
     await gateClear();
+  });
+
+  it('friendlinks 远端再大也不触发闸：远端 100 条 → 快照空表 ' + "'[]\\n'" + ' 照常 PUT（骤降闸只对 webstack 基线）', async () => {
+    await gateClear();
+    await gateSeed(1);
+    const gh = mkGH({ initial: { [WS]: remoteYml(3), [FLP]: remoteYml(100), [NVP]: '[]\n' } });
+    const r = await doPublish(mkEnv({ DB: gdb }), gdb, gh.fetchImpl);
+    expect(r.ok).toBe(true); // 若闸误对 friendlinks 生效，这里会是 bad_request
+    expect(gh.putBodies().map((b) => b.path)).toEqual([WS, FLP]); // friendlinks 100 条 → '[]\n' 属合法单写覆盖
   });
 });

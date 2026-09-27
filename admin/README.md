@@ -88,17 +88,19 @@ npx wrangler d1 execute navdata --remote --file=./seed.sql --yes
 ## 步骤 7 · publish 干跑
 
 > ⚠️ **顺序警告**：步骤 6（seed）必须先于步骤 7（publish）。现在 `doPublish` 已有**代码闸**
-> （终局评审 Important #1 落地）：① 快照 0 行直接拒绝（`bad_request`，不发起任何 GitHub 请求）；
+> （终局评审 Important #1 落地，两闸均只对 webstack 快照生效）：① 快照 0 行直接拒绝（`bad_request`，不发起任何 GitHub 请求）；
 > ② 骤降闸——远端 `- title:` 条目数 ≥ 20 且快照行数不足其一半时拒绝（PUT 至多一次的姿态不变）。
 > 文字警告降为背景说明：闸只拦明显异常，空库灌种顺序仍是部署手册层面的第一道防线。
+> friendlinks/headers 不受骤降闸约束（空表发布 `[]` 合法：三文件由后台单写）。
 
 ```bash
 curl -sS -X POST https://nav.wzyo.top/api/admin/publish -H "Authorization: Bearer <ADMIN_TOKEN>"
 ```
 
-预期：`{"commitUrl":…,"count":381}`（381 = seed 站点行数，与 `test/seed.test.mjs` 闸口断言一致）。**首次干跑可能产生一个 7 行引号风格 churn 的 commit（语义 diff 为零）**
-——seed 与线上 `webstack.yml` 的 YAML 引法可能有出入，属预期内一次性噪音；干跑后再点一次应走
-「远端内容 = 本次将写」幂等短路（不再产生 commit）。若报 `github_conflict` 说明远端有非本次发布的改动，停下人工看 diff。
+预期：`{"commitUrl":…,"count":381,"friendlinks":n,"navitems":n,"files":[{path,action}×3]}`（381 = seed 站点行数，与 `test/seed.test.mjs` 闸口断言一致；`action`：`put`=本次写入产生 commit / `skip`=远端逐字节已等）。发布现在一次同步**三份数据文件**：
+`data/webstack.yml` + `data/friendlinks.yml` + `data/headers.yml`。**首次干跑可能产生 3~4 个 commit**：
+两份新文件远端不存在时走「新建式 PUT」（各 1 个 commit），webstack 侧或有 7 行引号风格 churn 的一次性噪音（语义 diff 为零）
+——seed 与线上 `webstack.yml` 的 YAML 引法可能有出入，属预期内。干跑后再点一次应三文件全 `skip`（幂等短接，不再产生 commit）。若报 `github_conflict` 说明远端有非本次发布的改动，消息会写明「N 个文件已更新」——停下人工看 diff，修正后重试点发布即可收敛（内容比对幂等）。
 
 ## 步骤 8 · 手机扩展冒烟清单（用户参与）
 

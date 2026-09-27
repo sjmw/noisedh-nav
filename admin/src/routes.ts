@@ -484,7 +484,7 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
   if (p === '/api/admin/publish' && req.method === 'POST') {
     const r = await doPublish(env, db);
     if (!r.ok) return fail(r.code, r.message);
-    return json({ commitUrl: r.commitUrl, count: r.count });
+    return json({ commitUrl: r.commitUrl, count: r.count, friendlinks: r.friendlinks, navitems: r.navitems, files: r.files });
   }
 
   return jsonError('bad_request', '接口不存在', 404); // 路径不属于本表：404（code 枚举无 not_found，取 bad_request 承载）

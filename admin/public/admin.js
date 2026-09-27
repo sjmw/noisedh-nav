@@ -4,7 +4,7 @@
  *  - 口令存 sessionStorage（brief 拍板；spec §7 原文写 localStorage，以 brief 为准——关标签页即失效）。
  *  - 任何地方不打印/不落盘 token；401 → 清除口令并重新显示口令条。
  *  - 所有请求走 /api/admin/*，响应壳：单行 {site}、列表 {sites,total,page,perPage}、
- *    导入 {added,skipped_dup,failed,items}、发布 {commitUrl,count}、错误 {error,message}。
+ *    导入 {added,skipped_dup,failed,items}、发布 {commitUrl,count,friendlinks,navitems,files}（Task 9 三文件化）、错误 {error,message}。
  *  - URL 锚定源根（location.origin + '/api/admin/'）：页面可能挂在 /（本地 dev）或 /admin/
  *    （线上区域路由），路径相对解析在 /admin/ 下会指向 /admin/api/... 而失效；同源绝对路径两处均正确。
  */
@@ -423,7 +423,7 @@ $('publish-btn').addEventListener('click', async (btn) => {
   btn.textContent = '发布中…';
   try {
     const r = await api('publish', { method: 'POST', body: '{}' });
-    toast(`发布成功：${r.count} 条站点已写入 webstack.yml。`, { type: 'ok', linkUrl: r.commitUrl, ttl: 12000 });
+    toast(`发布成功：${r.count} 条站点已写入 webstack/friendlinks/headers 三数据文件。`, { type: 'ok', linkUrl: r.commitUrl, ttl: 12000 });
     loadList();
   } catch (e) {
     // 失败路径：后端统一错误信封 {error,message}（如 GITHUB_TOKEN 未配置/冲突/空库与骤降保护闸），toast 呈现，不崩

@@ -76,18 +76,20 @@ async function ghGetOnce(
   return { text: b64DecodeUtf8(data.content), sha: data.sha };
 }
 
-/** PUT 同路径写文件（branch=main + sha 乐观锁）；非 2xx 一律抛 GithubApiError（409 由调用方按 spec §5.4 处理） */
+/** PUT 同路径写文件（branch=main + sha 乐观锁）；非 2xx 一律抛 GithubApiError（409 由调用方按 spec §5.4 处理）。
+ *  sha=null → 请求体整个省略 sha 键：Contents API 的「新建文件」路径（Task 9 预检 GET 404 后使用）。
+ *  注意必须键缺席而非空串——GitHub 对 sha:"" 的既有文件 PUT 行为未定义，不能赌。 */
 export async function ghPut(
   repo: string,
   path: string,
   text: string,
-  sha: string,
+  sha: string | null,
   message: string,
   token: string,
   fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<{ commitUrl: string }> {
   const url = `${GH_API}/repos/${repo}/contents/${path}`;
-  const body = JSON.stringify({ message, content: b64EncodeUtf8(text), branch: 'main', sha });
+  const body = JSON.stringify({ message, content: b64EncodeUtf8(text), branch: 'main', ...(sha !== null ? { sha } : {}) });
   const res = await fetchImpl(url, {
     method: 'PUT',
     headers: { ...ghHeaders(token), 'Content-Type': 'application/json' },
