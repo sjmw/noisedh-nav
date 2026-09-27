@@ -5,6 +5,7 @@ import { normalizeUrl } from './url';
 import { fetchPage, extractBaseline } from './extract';
 import { aiAnalyze } from './ai';
 import { categoryShapePairs, resolveCategoryShape } from './category';
+import { probeFaviconIm, extractLogo } from './logo';
 import { getSiteByUrl, insertSite, upsertCategory, allCategories } from './db';
 import type { AiResult } from './ai';
 import type { CategoryRow, Env, SiteRow } from './types';
@@ -57,6 +58,8 @@ export async function analyzeAndUpsert(
   let description = '';
   let taxonomy = '';
   let term = '';
+  let analyzed = false; // 直通与否的标志：logo 探测只跟随分析路径（直通保持零网络）
+  let html = '';
 
   if (eTitle !== '' && eTax !== '') {
     // 扩展直通：title+taxonomy 同时显式给出 → 不抓取、不调 AI
@@ -65,6 +68,7 @@ export async function analyzeAndUpsert(
     description = trim(opts.description);
     term = trim(opts.term);
   } else {
+    analyzed = true;
     // AI 传参 union 化（冒烟修复轮）：分类全集与子分类清单都取 categories∪sites，
     // 不再只喂 categories 表（历史上只有 3 行，AI 面对 381 行的真实形态是瞎的）。
     const pairs = await categoryShapePairs(db);
@@ -72,7 +76,7 @@ export async function analyzeAndUpsert(
     const subcategories: Record<string, string[]> = {};
     for (const p of pairs) if (p.term !== '') (subcategories[p.taxonomy] ??= []).push(p.term);
     const page = await fetchPage(url, fetchImpl);
-    const html = 'html' in page ? page.html : '';
+    html = 'html' in page ? page.html : '';
     const base = html === '' ? baseline : extractBaseline(html);
     const aiOk: AiResult | null =
       html !== '' && env.AI_BASE_URL && env.AI_API_KEY && env.AI_MODEL
@@ -106,7 +110,14 @@ export async function analyzeAndUpsert(
   // 最终 (taxonomy, term) 落库前形态归一——直通 / AI / hint 覆盖三条分支的汇合处统一收口（集成点 1）。
   ({ taxonomy, term } = await resolveCategoryShape(db, taxonomy, term));
 
+  // logo 解析链（2026-09-27 优化）：显式值最高优先且零网络；分析路径下 favicon.im 探测
+  // （占位"f"SVG/非 image 类型均视为未命中）→ 网页 HTML 提取 → FAVICON_TEMPLATE 兜底。
+  // 直通路径保持零网络不变（扩展批量保存不被探测拖慢），只走 显式值 → 模板。
   let logo = trim(opts.logo);
+  if (logo === '' && analyzed) {
+    logo = await probeFaviconIm(host, fetchImpl);
+    if (logo === '' && html !== '') logo = extractLogo(html, url);
+  }
   if (logo === '' && env.FAVICON_TEMPLATE) logo = env.FAVICON_TEMPLATE.replace(/\{host\}/g, host);
 
   // 最终 (taxonomy, term) 组合缺失时补 categories 行（发布导出依赖 icon）

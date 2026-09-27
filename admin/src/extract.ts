@@ -41,7 +41,7 @@ export function extractBaseline(html: string): Baseline {
   };
 }
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+export const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'; // logo.ts 探测共用：workerd 默认 UA 会被 Cloudflare 前置站点（favicon.im）403
 const MAX_BYTES = 65536; // 64KB
 const TIMEOUT_MS = 15000;
 const MAX_ATTEMPTS = 2; // 首次 + 单次重试
