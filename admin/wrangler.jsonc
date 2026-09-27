@@ -17,6 +17,13 @@
       // database_id 来自 `wrangler d1 create navdata`（2026-09-27 已执行，Task 12 手册步骤 2）
     }
   ],
+  // 区域路由（Task 12 手册步骤 5）：三段路径从 Pages 切给本 Worker；
+  // 若验证发现某段在 Pages 自定义域上不生效，按硬约束停下报告，不得私改前台 Pages 配置
+  "routes": [
+    { "pattern": "nav.wzyo.top/admin*", "zone_name": "wzyo.top" },
+    { "pattern": "nav.wzyo.top/api/*", "zone_name": "wzyo.top" },
+    { "pattern": "nav.wzyo.top/data*", "zone_name": "wzyo.top" }
+  ],
   // 非密配置按 spec §2.1 走 vars（明文入仓库无泄露面）；密仅 ADMIN_TOKEN/GITHUB_TOKEN/（可选）AI_* 三项 secret
   "vars": {
     "DEFAULT_TAXONOMY": "未分类",
