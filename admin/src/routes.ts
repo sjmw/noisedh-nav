@@ -190,17 +190,15 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
   }
 
   // ── navitems（spec-27 §3.2）：一层下拉限制（assertMount 闸）+ 原子批删 ──
-  // 一层限制闸：parent 必须存在且为顶层；禁改挂向自身
+  // 一层限制闸：parent 必须存在且为顶层；禁改挂向自身。
+  // 审查裁决1：目标侧「该顶层项已有子项」计数分支删除——把子项挂到已有子的顶层是合法操作；
+  // 一层不变式由「父须顶层」闸 + 下方 PATCH 自侧降挂闸封死（评审审计确认无逃逸路径）。
   const assertMount = async (parent_id: number | null | undefined, selfId?: number): Promise<string | null> => {
     if (parent_id === null || parent_id === undefined) return null;
     if (selfId !== undefined && parent_id === selfId) return 'parent_id 不能指向自身';
     const parent = await getNavitemById(db, parent_id);
     if (!parent) return 'parent_id 指向不存在的项';
     if (parent.parent_id !== null) return '仅支持一层下拉：父项本身不能是子项';
-    if (selfId !== undefined && (await countNavChildren(db, parent_id)) > 0 && parent.parent_id === null) {
-      // 把「有子项的顶层」降为子项会造出三层结构——PATCH 时拒（POST 新项无子，天然不触发）
-      if (selfId !== undefined) return '该顶层项已有子项，不能作为子项挂载（会超过一层）';
-    }
     return null;
   };
 
@@ -284,13 +282,16 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
       }
       const existing = await getNavitemById(db, id);
       if (!existing) return jsonError('bad_request', '导航项不存在', 404);
+      // 升顶闸（裁决2 三形态，行为4b 固化）：parent_id:null 仅拦「行有子」——
+      // ① 无子顶层 no-op → 放行 200；② 有子顶层 → 语义突变仍 400（UI 编辑有子顶层须省略 parent_id）；
+      // ③ 真升顶（existing.parent_id !== null）：一层不变式下子行必无子 → 天然放行 200（脏态「有子之子」也会被本闸兜住）。
       if (patch.parent_id === null && (await countNavChildren(db, id)) > 0) return fail('bad_request', '请删除子项后再升顶');
       const mountErr = await assertMount(patch.parent_id as number | null | undefined, id);
       if (mountErr) return fail('bad_request', mountErr);
-      // verbatim 闸只查目标父的子项数（注释原文「把『有子项的顶层』降为子项」指自身）：
-      // 自身有子降挂到无子顶层仍会造三层，此处在 handler 侧补自身维度检查，不变式封死。
+      // 降挂闸（自侧，裁决1 后一层不变式对降挂的唯一守卫）：该顶层项已有子项，不能作为子项挂载——
+      // 把「有子项的顶层」降为子项会造出三层（POST 新项无子，天然不触发）。
       if (patch.parent_id !== undefined && patch.parent_id !== null && (await countNavChildren(db, id)) > 0) {
-        return fail('bad_request', '该项已有子项，不能作为子项挂载（会超过一层）');
+        return fail('bad_request', '该顶层项已有子项，不能作为子项挂载（会超过一层）');
       }
       if (patch.item !== undefined) patch.item = (patch.item as string).trim();
       if (patch.icon !== undefined) patch.icon = (patch.icon as string).trim();

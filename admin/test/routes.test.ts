@@ -435,7 +435,7 @@ describe('/api/admin/navitems', () => {
     expect(r3.status).toBe(400);
     expect((await getJson(r3)).message).toContain('请删除子项后再升顶');
     const q = await mk({ item: '空父4' });
-    const r4 = await navPatch(p.id, { parent_id: q.id }); // 自身有子（verbatim 闸查目标侧），由 handler 自侧子项数补闸
+    const r4 = await navPatch(p.id, { parent_id: q.id }); // 自身有子降挂 → handler 自侧闸拦（裁决1 后一层不变式的降挂守卫）
     expect(r4.status).toBe(400);
     expect((await getJson(r4)).message).toContain('子项');
     const r5 = await navPatch(c.id, { parent_id: q.id }); // 无子子项改挂空顶层 → 放行
@@ -445,13 +445,35 @@ describe('/api/admin/navitems', () => {
     expect(r6.status).toBe(200);
     const q2 = await mk({ item: '有子父4' });
     const d = await mk({ item: '子4d', parent_id: q2.id });
-    const r7 = await navPatch(c.id, { parent_id: q2.id }); // verbatim 闸：目标顶层已有子 → 拒（行为固化，供评审知悉）
-    expect(r7.status).toBe(400);
-    expect((await getJson(r7)).message).toContain('已有子项');
+    // 审查裁决1：目标侧「该顶层项已有子项」分支删除——挂到已有子的顶层是合法操作（一层不变式由自侧闸+父须顶层闸封死）
+    const r7 = await navPatch(c.id, { parent_id: q2.id });
+    expect(r7.status).toBe(200);
+    expect((await getJson(r7)).navitem).toMatchObject({ id: c.id, parent_id: q2.id });
     const missing = await navPatch(999999, { item: 'x' });
     expect(missing.status).toBe(404);
     expect(await getJson(missing)).toMatchObject({ error: 'bad_request' });
+    // GET 分组：q2 两子 (d,c) 按 (sort,id) 紧跟其后；p/q 已无子
+    const own = new Set<number>([p.id, q.id, q2.id, c.id, d.id]);
+    expect((await navList()).filter((r) => own.has(r.id)).map((r) => r.id)).toEqual([p.id, q.id, q2.id, c.id, d.id]);
     for (const id of [c.id, d.id, p.id, q.id, q2.id]) await navDelete(id);
+  });
+
+  it('行为4b（裁决2）：PATCH parent_id:null 三形态——无子顶层 no-op 放行；有子顶层仍 400；无子子项真升顶放行', async () => {
+    const t = await mk({ item: '无子顶4b' });
+    const rNoopTop = await navPatch(t.id, { parent_id: null }); // ① 无子顶层 no-op → 200 原样
+    expect(rNoopTop.status).toBe(200);
+    expect((await getJson(rNoopTop)).navitem).toMatchObject({ id: t.id, parent_id: null, item: '无子顶4b' });
+    const c = await mk({ item: '子4b', parent_id: t.id });
+    const rTopWithKids = await navPatch(t.id, { parent_id: null }); // ② 有子顶层 → 升顶闸仍 400（r3 同型，此处固化）
+    expect(rTopWithKids.status).toBe(400);
+    expect((await getJson(rTopWithKids)).message).toContain('请删除子项后再升顶');
+    const rPromote = await navPatch(c.id, { parent_id: null }); // ③ 无子子项真升顶 → 200（一层不变式下子行必无子，闸不误伤）
+    expect(rPromote.status).toBe(200);
+    expect((await getJson(rPromote)).navitem).toMatchObject({ id: c.id, parent_id: null });
+    const own = new Set<number>([t.id, c.id]);
+    expect((await navList()).filter((r) => own.has(r.id)).map((r) => r.id)).toEqual([t.id, c.id]); // 两顶层并列 (sort,id)
+    await navDelete(c.id);
+    await navDelete(t.id);
   });
 
   it('行为5：DELETE 有子顶层 → 400（message 含「子项」）；先删子再删父 → 204/204；DELETE 幂等；/:id GET → 400 方法不支持', async () => {
