@@ -6,6 +6,10 @@
       logo: https://jsd.cdn.noisework.cn/gh/rcy1314/tuchuang@main/uPic/7877y.jpeg
       url: https://tg.noisework.cn
       description: 我的TG频道页面
+    - title: 百度一下，你就知道
+      logo: https://www.baidu.com/favicon.ico
+      url: https://www.baidu.com/
+      description: 全球领先的中文搜索引擎、致力于让网民更便捷地获取信息，找到所求。百度超过千亿的中文网页数据库，可以瞬间找到相关的搜索结果。
     - title: 说说笔记
       logo: https://s2.loli.net/2025/04/07/fgn9WUwZbcGXpDk.png
       url: https://note.noisework.cn
@@ -98,8 +102,6 @@
       logo: cloudflare.png
       url: https://dash.cloudflare.com
       description: cloudflare
-- taxonomy: 未分类
-  icon: fas fa-folder-open fa-lg
 - taxonomy: 媒体创作
   icon: fas fa-folder-open fa-lg
   list:
