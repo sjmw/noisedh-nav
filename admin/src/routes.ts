@@ -13,9 +13,10 @@ import {
   listSites, getSiteById, insertSite, updateSite, deleteSite,
   allCategories, upsertCategory, deleteCategory,
   allFriendlinks, insertFriendlink, updateFriendlink, deleteByIds,
+  allNavitems, insertNavitem, updateNavitem, getNavitemById, countNavChildren,
 } from './db';
 import type { SitePatch } from './db';
-import type { Env, SiteRow } from './types';
+import type { Env, SiteRow, NavitemRow } from './types';
 import type { ErrCode } from './errors';
 
 // 导入体积闸（spec §4.1：输入上限 10MB）——按「解码后的 html 字符串」的 UTF-8 字节数计，
@@ -185,6 +186,129 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
       return row ? json({ friendlink: row }) : jsonError('bad_request', '友链不存在', 404);
     }
     if (req.method === 'DELETE') { await deleteByIds(db, 'friendlinks', [id]); return new Response(null, { status: 204 }); }
+    return fail('bad_request', '方法不支持'); // Task 4 评审结转：兜底对齐 sites 段——GET/PUT 不再漏到路由尾部 404
+  }
+
+  // ── navitems（spec-27 §3.2）：一层下拉限制（assertMount 闸）+ 原子批删 ──
+  // 一层限制闸：parent 必须存在且为顶层；禁改挂向自身
+  const assertMount = async (parent_id: number | null | undefined, selfId?: number): Promise<string | null> => {
+    if (parent_id === null || parent_id === undefined) return null;
+    if (selfId !== undefined && parent_id === selfId) return 'parent_id 不能指向自身';
+    const parent = await getNavitemById(db, parent_id);
+    if (!parent) return 'parent_id 指向不存在的项';
+    if (parent.parent_id !== null) return '仅支持一层下拉：父项本身不能是子项';
+    if (selfId !== undefined && (await countNavChildren(db, parent_id)) > 0 && parent.parent_id === null) {
+      // 把「有子项的顶层」降为子项会造出三层结构——PATCH 时拒（POST 新项无子，天然不触发）
+      if (selfId !== undefined) return '该顶层项已有子项，不能作为子项挂载（会超过一层）';
+    }
+    return null;
+  };
+
+  // GET 序（控制器裁定，db.ts 不改）：allNavitems 的 SQL 以顶层 id 群聚，此处路由层后处理为
+  // 顶层按 (sort,id)、子项紧跟其父并按 (sort,id)；孤儿子项（父行不存在）保留在尾部同 key。
+  if (p === '/api/admin/navitems' && req.method === 'GET') {
+    const rows = await allNavitems(db);
+    const tops: NavitemRow[] = [];
+    const childrenOf = new Map<number, NavitemRow[]>();
+    for (const r of rows) {
+      if (r.parent_id === null) { tops.push(r); continue; }
+      const arr = childrenOf.get(r.parent_id) ?? [];
+      arr.push(r);
+      childrenOf.set(r.parent_id, arr);
+    }
+    const order = (a: NavitemRow, b: NavitemRow): number => a.sort - b.sort || a.id - b.id;
+    tops.sort(order);
+    const out: NavitemRow[] = [];
+    for (const t of tops) {
+      out.push(t);
+      out.push(...(childrenOf.get(t.id) ?? []).sort(order));
+      childrenOf.delete(t.id);
+    }
+    out.push(...[...childrenOf.values()].flat().sort(order)); // 孤儿兜底：不静默丢行
+    return json({ navitems: out });
+  }
+  if (p === '/api/admin/navitems' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    if (!body) return fail('bad_request', '需要 JSON 对象');
+    const item = typeof body.item === 'string' ? body.item.trim() : '';
+    if (!item) return fail('bad_request', '需要 {item:string 非空, icon?, link?, parent_id?, sort?}');
+    if (body.parent_id !== undefined && body.parent_id !== null && !(Number.isInteger(body.parent_id) && (body.parent_id as number) > 0)) {
+      return fail('bad_request', 'parent_id 需为 null 或正整数');
+    }
+    const pid = body.parent_id as number | null | undefined;
+    const mountErr = await assertMount(pid); // POST 无 selfId：新项天然无子，只查挂载合法性
+    if (mountErr) return fail('bad_request', mountErr);
+    const str = (k: string): string => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
+    const sort = typeof body.sort === 'number' && Number.isFinite(body.sort) ? Math.trunc(body.sort) : 0;
+    const row = await insertNavitem(db, { item, icon: str('icon'), link: str('link'), parent_id: pid ?? null, sort });
+    return json({ navitem: row }, 201);
+  }
+  // 字面量段先于 /:id 正则（同 friendlinks）：POST batch-delete 不被当成 id。原子性=先全量校验后删除。
+  if (p === '/api/admin/navitems/batch-delete' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const ids = body?.ids;
+    if (!Array.isArray(ids) || !ids.length || !ids.every((n) => Number.isInteger(n) && (n as number) > 0)) return fail('bad_request', 'ids 需为正的整数数组');
+    const uniq = [...new Set(ids as number[])];
+    const idSet = new Set(uniq);
+    const rows = await allNavitems(db);
+    const byId = new Map<number, NavitemRow>(rows.map((r) => [r.id, r]));
+    const kidsOf = new Map<number, number[]>();
+    for (const r of rows) {
+      if (r.parent_id === null) continue;
+      const arr = kidsOf.get(r.parent_id) ?? [];
+      arr.push(r.id);
+      kidsOf.set(r.parent_id, arr);
+    }
+    for (const id of uniq) {
+      const row = byId.get(id);
+      if (!row || row.parent_id !== null) continue; // 不存在的 id 幂等跳过；子项无「未选中的子」可言
+      const missing = (kidsOf.get(id) ?? []).filter((k) => !idSet.has(k));
+      if (missing.length) return fail('bad_request', `顶层项「${row.item}」仍有未选中的子项（id ${missing.join(', ')}）：批量删除需连同子项一并勾选（整体拒绝，零删除）`);
+    }
+    return json({ deleted: await deleteByIds(db, 'navitems', uniq) });
+  }
+  const nvM = /^\/api\/admin\/navitems\/(\d+)$/.exec(p);
+  if (nvM) {
+    const id = Number(nvM[1]);
+    if (req.method === 'PATCH') {
+      const body = await readJsonBody(req);
+      if (!body) return fail('bad_request', '需要 JSON 对象');
+      const patch: Record<string, unknown> = {};
+      for (const k of ['item', 'icon', 'link', 'parent_id', 'sort'] as const) if (body[k] !== undefined) patch[k] = body[k];
+      if (!Object.keys(patch).length) return fail('bad_request', '无可更新字段（白名单：item,icon,link,parent_id,sort）');
+      if (patch.item !== undefined && (typeof patch.item !== 'string' || !(patch.item as string).trim())) return fail('bad_request', 'item 需为非空字符串');
+      for (const k of ['icon', 'link'] as const) if (patch[k] !== undefined && typeof patch[k] !== 'string') return fail('bad_request', `${k} 需为字符串`); // link/icon 允许空串（纯下拉容器）
+      if (patch.sort !== undefined && (typeof patch.sort !== 'number' || !Number.isFinite(patch.sort))) return fail('bad_request', 'sort 需为数字');
+      if (patch.parent_id !== undefined && patch.parent_id !== null && !(Number.isInteger(patch.parent_id) && (patch.parent_id as number) > 0)) {
+        return fail('bad_request', 'parent_id 需为 null 或正整数');
+      }
+      const existing = await getNavitemById(db, id);
+      if (!existing) return jsonError('bad_request', '导航项不存在', 404);
+      if (patch.parent_id === null && (await countNavChildren(db, id)) > 0) return fail('bad_request', '请删除子项后再升顶');
+      const mountErr = await assertMount(patch.parent_id as number | null | undefined, id);
+      if (mountErr) return fail('bad_request', mountErr);
+      // verbatim 闸只查目标父的子项数（注释原文「把『有子项的顶层』降为子项」指自身）：
+      // 自身有子降挂到无子顶层仍会造三层，此处在 handler 侧补自身维度检查，不变式封死。
+      if (patch.parent_id !== undefined && patch.parent_id !== null && (await countNavChildren(db, id)) > 0) {
+        return fail('bad_request', '该项已有子项，不能作为子项挂载（会超过一层）');
+      }
+      if (patch.item !== undefined) patch.item = (patch.item as string).trim();
+      if (patch.icon !== undefined) patch.icon = (patch.icon as string).trim();
+      if (patch.link !== undefined) patch.link = (patch.link as string).trim();
+      if (patch.sort !== undefined) patch.sort = Math.trunc(patch.sort as number);
+      const row = await updateNavitem(db, id, patch as never);
+      return row ? json({ navitem: row }) : jsonError('bad_request', '导航项不存在', 404);
+    }
+    if (req.method === 'DELETE') {
+      const existing = await getNavitemById(db, id);
+      const kids = existing ? await countNavChildren(db, id) : 0;
+      if (existing && kids > 0) {
+        return fail('bad_request', `该顶层项下仍有 ${kids} 个子项：请先删除子项，或用 batch-delete 连同子项一并勾选`);
+      }
+      await deleteByIds(db, 'navitems', [id]); // 幂等：不存在也 204（同 friendlinks 口径）
+      return new Response(null, { status: 204 });
+    }
+    return fail('bad_request', '方法不支持');
   }
 
   // ── categories ──

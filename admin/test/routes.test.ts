@@ -329,6 +329,9 @@ describe('/api/admin/friendlinks', () => {
     expect(missing.status).toBe(404);
     expect(await getJson(missing)).toMatchObject({ error: 'bad_request' });
     expect((await dev.fetch('/api/admin/friendlinks/999999', { method: 'DELETE', headers: auth })).status).toBe(204);
+    // Task 5 结转修复：/:id 块补「方法不支持」兜底（对齐 sites 段原文案）——GET/PUT 不再漏到路由尾部 404
+    expect((await dev.fetch('/api/admin/friendlinks/999999', { headers: auth })).status).toBe(400);
+    expect((await dev.fetch('/api/admin/friendlinks/999999', { method: 'PUT', headers: authJson, body: '{}' })).status).toBe(400);
     await dev.fetch(`/api/admin/friendlinks/${a.id}`, { method: 'DELETE', headers: auth }); // 清理，表回到空
   });
   it('POST 校验：title/url 非空否则 400；url 不做 normalizeUrl（"/relative" 原样存）', async () => {
@@ -362,6 +365,143 @@ describe('/api/admin/friendlinks', () => {
     expect((await post('/api/admin/friendlinks/batch-delete', {})).status).toBe(400); // 缺 ids
     const one = await post('/api/admin/friendlinks/batch-delete', { ids: [ids[2]] });
     expect(await getJson(one)).toEqual({ deleted: 1 });
+  });
+});
+
+// ── Task 5：/api/admin/navitems（spec-27 §3.2）：一层下拉限制 + 原子批删 ──
+describe('/api/admin/navitems', () => {
+  const navList = async () => ((await getJson(await dev.fetch('/api/admin/navitems', { headers: auth }))).navitems) as any[];
+  const mk = async (body: Record<string, unknown>) => {
+    const res = await post('/api/admin/navitems', body);
+    expect(res.status).toBe(201);
+    return (await getJson(res)).navitem;
+  };
+  const navPatch = (id: number, body: unknown) =>
+    dev.fetch(`/api/admin/navitems/${id}`, { method: 'PATCH', headers: authJson, body: JSON.stringify(body) });
+  const navDelete = (id: number) => dev.fetch(`/api/admin/navitems/${id}`, { method: 'DELETE', headers: auth });
+
+  it('行为1：POST 顶层 → 201 {navitem}，parent_id null，icon/link/sort 缺省为空/0', async () => {
+    const res = await post('/api/admin/navitems', { item: '首页', icon: 'fa fa-home', link: './' });
+    expect(res.status).toBe(201);
+    const n = (await getJson(res)).navitem;
+    expect(n).toMatchObject({ id: expect.any(Number), item: '首页', icon: 'fa fa-home', link: './', sort: 0 });
+    expect(n.parent_id).toBe(null);
+    expect(typeof n.created_at).toBe('string');
+    const bare = await mk({ item: '裸顶层' });
+    expect(bare).toMatchObject({ icon: '', link: '', sort: 0 });
+    expect(bare.parent_id).toBe(null);
+    await navDelete(n.id);
+    await navDelete(bare.id);
+  });
+
+  it('行为2：POST 子项 → 201；GET 序=顶层按 (sort,id)，子项紧跟父并按 (sort,id)（路由层后处理裁定）', async () => {
+    const t2 = await mk({ item: 'T2', sort: 2 });
+    const t1 = await mk({ item: 'T1', sort: 1 });
+    const cA = await mk({ item: 'Emoji', link: './assets/emoji/', parent_id: t1.id, sort: 5 });
+    const cB = await mk({ item: 'B', link: './b/', parent_id: t1.id, sort: 1 });
+    const cC = await mk({ item: 'C', parent_id: t2.id });
+    const ids = new Set<number>([t1.id, t2.id, cA.id, cB.id, cC.id]);
+    const seq = (await navList()).filter((r) => ids.has(r.id)).map((r) => r.id);
+    expect(seq).toEqual([t1.id, cB.id, cA.id, t2.id, cC.id]); // 顶层 sort 1<2；t1 两子按 sort 1<5 紧跟其后
+    for (const id of [cA.id, cB.id, cC.id, t1.id, t2.id]) await navDelete(id);
+  });
+
+  it('行为3：POST parent_id 指向子项/不存在/非法类型 → 400（一层封死）；坏 JSON → 400', async () => {
+    const p = await mk({ item: '父3' });
+    const c = await mk({ item: '子3', parent_id: p.id });
+    const bad1 = await post('/api/admin/navitems', { item: '孙', parent_id: c.id });
+    expect(bad1.status).toBe(400);
+    expect((await getJson(bad1)).message).toContain('一层');
+    const bad2 = await post('/api/admin/navitems', { item: '挂不存在的', parent_id: 999999 });
+    expect(bad2.status).toBe(400);
+    expect((await getJson(bad2)).message).toContain('不存在');
+    expect((await post('/api/admin/navitems', { item: '类型错', parent_id: '3' })).status).toBe(400); // 字符串 id
+    expect((await post('/api/admin/navitems', { item: '非正', parent_id: 0 })).status).toBe(400);
+    expect((await dev.fetch('/api/admin/navitems', { method: 'POST', headers: authJson, body: '{nope' })).status).toBe(400); // 坏 JSON → readJsonBody null
+    await navDelete(c.id);
+    await navDelete(p.id);
+  });
+
+  it('行为4：PATCH 成环/破层/升顶闸（父挂向自身→400；null 且行有子→400 请删除子项后再升顶；有子顶层降挂→400）', async () => {
+    const p = await mk({ item: '父4' });
+    const c = await mk({ item: '子4', parent_id: p.id });
+    const r1 = await navPatch(p.id, { parent_id: c.id }); // 父项挂到自己子项下 = 环 + 三层
+    expect(r1.status).toBe(400);
+    expect((await getJson(r1)).message).toContain('一层');
+    const r2 = await navPatch(p.id, { parent_id: p.id });
+    expect(r2.status).toBe(400);
+    expect((await getJson(r2)).message).toContain('自身');
+    const r3 = await navPatch(p.id, { parent_id: null }); // 行有子：null 挂载被闸（控制器裁定闸）
+    expect(r3.status).toBe(400);
+    expect((await getJson(r3)).message).toContain('请删除子项后再升顶');
+    const q = await mk({ item: '空父4' });
+    const r4 = await navPatch(p.id, { parent_id: q.id }); // 自身有子（verbatim 闸查目标侧），由 handler 自侧子项数补闸
+    expect(r4.status).toBe(400);
+    expect((await getJson(r4)).message).toContain('子项');
+    const r5 = await navPatch(c.id, { parent_id: q.id }); // 无子子项改挂空顶层 → 放行
+    expect(r5.status).toBe(200);
+    expect((await getJson(r5)).navitem).toMatchObject({ id: c.id, parent_id: q.id });
+    const r6 = await navPatch(c.id, { parent_id: p.id }); // p 之子已迁走 → 挂回放行
+    expect(r6.status).toBe(200);
+    const q2 = await mk({ item: '有子父4' });
+    const d = await mk({ item: '子4d', parent_id: q2.id });
+    const r7 = await navPatch(c.id, { parent_id: q2.id }); // verbatim 闸：目标顶层已有子 → 拒（行为固化，供评审知悉）
+    expect(r7.status).toBe(400);
+    expect((await getJson(r7)).message).toContain('已有子项');
+    const missing = await navPatch(999999, { item: 'x' });
+    expect(missing.status).toBe(404);
+    expect(await getJson(missing)).toMatchObject({ error: 'bad_request' });
+    for (const id of [c.id, d.id, p.id, q.id, q2.id]) await navDelete(id);
+  });
+
+  it('行为5：DELETE 有子顶层 → 400（message 含「子项」）；先删子再删父 → 204/204；DELETE 幂等；/:id GET → 400 方法不支持', async () => {
+    const p = await mk({ item: '父5' });
+    const c = await mk({ item: '子5', parent_id: p.id });
+    const bad = await navDelete(p.id);
+    expect(bad.status).toBe(400);
+    expect((await getJson(bad)).message).toContain('子项');
+    expect((await navDelete(c.id)).status).toBe(204);
+    expect((await navDelete(p.id)).status).toBe(204);
+    expect((await navDelete(999999)).status).toBe(204); // 幂等（同 friendlinks/sites 口径）
+    expect((await dev.fetch('/api/admin/navitems/999999', { headers: auth })).status).toBe(400);
+  });
+
+  it('行为6：batch-delete 原子——{父}未含全部子 → 400 整体拒（GET 行数不变）；{父+全部子} → 200 deleted 全数', async () => {
+    const p = await mk({ item: '父6' });
+    const c1 = await mk({ item: '子6a', parent_id: p.id });
+    const c2 = await mk({ item: '子6b', parent_id: p.id });
+    const other = await mk({ item: '无关6' });
+    const before = (await navList()).length;
+    const reject1 = await post('/api/admin/navitems/batch-delete', { ids: [p.id] });
+    expect(reject1.status).toBe(400);
+    expect((await getJson(reject1)).message).toContain('子项');
+    expect((await post('/api/admin/navitems/batch-delete', { ids: [p.id, c1.id] })).status).toBe(400); // c2 仍未勾
+    expect((await navList()).length).toBe(before); // 原子性：零删除
+    const ok = await post('/api/admin/navitems/batch-delete', { ids: [p.id, c1.id, c2.id] });
+    expect(ok.status).toBe(200);
+    expect(await getJson(ok)).toEqual({ deleted: 3 });
+    expect((await navList()).length).toBe(before - 3);
+    expect((await post('/api/admin/navitems/batch-delete', { ids: [] })).status).toBe(400);
+    expect((await post('/api/admin/navitems/batch-delete', { ids: [0] })).status).toBe(400);
+    expect((await post('/api/admin/navitems/batch-delete', { ids: [1.5] })).status).toBe(400);
+    expect((await post('/api/admin/navitems/batch-delete', {})).status).toBe(400);
+    expect((await post('/api/admin/navitems/batch-delete', { ids: [other.id] })).status).toBe(200); // 字面量段先于 /:id：POST 不被当 id
+  });
+
+  it('行为7：POST/PATCH item 非空校验；link/icon 允许空串（纯下拉容器）；白名单外键 400；PATCH 生效回 200', async () => {
+    expect((await post('/api/admin/navitems', {})).status).toBe(400);
+    expect((await post('/api/admin/navitems', { item: '  ' })).status).toBe(400);
+    const box = await mk({ item: '纯下拉', link: '', icon: '' });
+    expect(box.link).toBe('');
+    expect((await navPatch(box.id, { item: '  ' })).status).toBe(400);
+    expect((await navPatch(box.id, { item: 5 })).status).toBe(400);
+    expect((await navPatch(box.id, { zz: 1 })).status).toBe(400); // 白名单外 → 无可更新字段
+    expect((await navPatch(box.id, { sort: '7' })).status).toBe(400); // sort 非数字
+    const r = await navPatch(box.id, { link: './new/', sort: 7 });
+    expect(r.status).toBe(200);
+    expect((await getJson(r)).navitem).toMatchObject({ id: box.id, link: './new/', sort: 7, item: '纯下拉', parent_id: null });
+    await navDelete(box.id);
+    expect(await navList()).toEqual([]); // 收尾：本 describe 数据自清理，表回到空
   });
 });
 
