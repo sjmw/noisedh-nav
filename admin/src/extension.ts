@@ -6,6 +6,7 @@
 
 import { analyzeAndUpsert } from './pipeline';
 import { normalizeUrl } from './url';
+import { resolveCategoryShape, pruneOrphanCategories } from './category';
 import { buildWebstackYml } from './yml';
 import { ghGet } from './github';
 import { jsonError, errStatus, readJsonBody } from './errors';
@@ -148,7 +149,10 @@ async function route(req: Request, u: URL, env: Env, deps: { fetchImpl?: typeof 
     }
     // 同名按最早 id 删除（追加序=文件展示序，删旧留新）；查无此题 → 204 幂等（popup 只判 res.ok）
     const row = await findOldestSiteByTitle(db, body.title);
-    if (row) await deleteSite(db, row.id);
+    if (row) {
+      await deleteSite(db, row.id);
+      await pruneOrphanCategories(db); // 删除成功后孤儿清理（防「删了站还卡发布」复发）
+    }
     return new Response(null, { status: 204 });
   }
 
@@ -186,8 +190,15 @@ async function dupToUpdate(db: D1Database, e: Record<string, unknown>): Promise<
     if (v !== '') (patch as Record<string, string>)[k] = v;
   }
   if (Object.keys(patch).length > 0) {
+    // 集成点 2：合并后的 final pair 过形态归一。例：既有 媒体创作/剪辑能手 被 patch 成 常用推荐（flat）
+    // 且 patch 不带 term → final term '剪辑能手' 必须置 ''，不得写入混用形态（brief 策略表第二行）。
+    const finalTax = patch.taxonomy ?? existing.taxonomy;
+    const finalTerm = patch.term ?? existing.term;
+    const resolved = await resolveCategoryShape(db, finalTax, finalTerm);
+    patch.taxonomy = resolved.taxonomy;
+    patch.term = resolved.term;
     // 分类/子分类变化时补 categories 行（发布导出依赖 icon；upsertCategory 为 DO NOTHING 补位语义，无条件安全）
-    await upsertCategory(db, { taxonomy: patch.taxonomy ?? existing.taxonomy, term: patch.term ?? existing.term });
+    await upsertCategory(db, { taxonomy: resolved.taxonomy, term: resolved.term });
     await updateSite(db, existing.id, patch); // 白名单字段、不含 status → 发布状态原样保留
   }
   return new Response(null, { status: 204 });

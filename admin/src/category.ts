@@ -21,6 +21,23 @@ export async function categoryShapePairs(db: D1Database): Promise<ShapePair[]> {
   return results;
 }
 
+export type TaxonomyShape = 'unknown' | 'flat' | 'nested' | 'mixed';
+
+// 从 union pairs 判定某 taxonomy 既有形态（策略表第一列）。mixed=历史脏数据，消费侧按嵌套处理。
+export function shapeOfTaxonomy(pairs: ShapePair[], taxonomy: string): TaxonomyShape {
+  let hasEmpty = false;
+  let hasNonEmpty = false;
+  for (const p of pairs) {
+    if (p.taxonomy !== taxonomy) continue;
+    if (p.term === '') hasEmpty = true;
+    else hasNonEmpty = true;
+  }
+  if (hasEmpty && hasNonEmpty) return 'mixed';
+  if (hasEmpty) return 'flat';
+  if (hasNonEmpty) return 'nested';
+  return 'unknown';
+}
+
 // 策略表（用户已裁决）：
 // | 既有形态                              | 传入 term | 结果        |
 // | 未知（两源均无行）                    | 任意      | 原样        |
@@ -37,15 +54,9 @@ export async function resolveCategoryShape(
 ): Promise<{ taxonomy: string; term: string }> {
   const tax = taxonomy.trim();
   const t = term.trim();
-  let hasEmpty = false;
-  let hasNonEmpty = false;
-  for (const p of await categoryShapePairs(db)) {
-    if (p.taxonomy !== tax) continue;
-    if (p.term === '') hasEmpty = true;
-    else hasNonEmpty = true;
-  }
-  if (!hasEmpty && !hasNonEmpty) return { taxonomy: tax, term: t }; // 未知分类：新分类可自带子结构
-  if (hasNonEmpty) return { taxonomy: tax, term: t === '' ? UNGROUPED_TERM : t }; // 嵌套/混用：按嵌套
+  const shape = shapeOfTaxonomy(await categoryShapePairs(db), tax);
+  if (shape === 'unknown') return { taxonomy: tax, term: t }; // 新分类可自带子结构
+  if (shape === 'nested' || shape === 'mixed') return { taxonomy: tax, term: t === '' ? UNGROUPED_TERM : t };
   return { taxonomy: tax, term: '' }; // flat：垃圾子分类静默丢弃，保住分类本身
 }
 

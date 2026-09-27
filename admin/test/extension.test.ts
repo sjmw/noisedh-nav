@@ -127,8 +127,10 @@ describe('POST /api/yaml（收藏写入，Bearer）', () => {
     expect((await postYaml(yamlBody({ url: 'javascript:alert(1)' }))).status).toBe(400);
   });
   it('重复 URL（ledger 裁定）→ 更新显式非空字段、保留 status 不自动发布、不重跑抓取/AI、204、仅一行、id 不变', async () => {
-    const s = await mkSite('https://duped.invalid', { title: '原题', taxonomy: 'EXTD' });
-    await dev.fetch(`/api/admin/sites/${s.id}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ status: 'published', term: '原term', description: '原摘要' }) });
+    // 冒烟修复轮适配：原用例靠 PATCH term='原term' 造非空 term，但 PATCH 现已对 flat 分类的垃圾 term 归一
+    // （EXTD 初建即 flat 形态），改由直通造数（未知分类可自带子结构=策略表第一行），断言语义不变。
+    const s = await mkSite('https://duped.invalid', { title: '原题', taxonomy: 'EXTD', term: '原term' });
+    await dev.fetch(`/api/admin/sites/${s.id}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ status: 'published', description: '原摘要' }) });
     const res = await postYaml(yamlBody({ title: '改题', url: 'https://duped.invalid/', logo: 'p2.png', description: '新摘要', taxonomy: 'EXT2' }));
     expect(res.status).toBe(204);
     const list = await jf(await dev.fetch('/api/admin/sites?q=duped', { headers: auth }));
@@ -137,6 +139,19 @@ describe('POST /api/yaml（收藏写入，Bearer）', () => {
     expect(row.id).toBe(s.id); // 更新原行而非重插（重插/重分析都会换 id）
     expect(row).toMatchObject({ title: '改题', description: '新摘要', logo: 'p2.png', taxonomy: 'EXT2', term: '原term', status: 'published', url_raw: 'https://duped.invalid' });
     // status 保留 published（不自动发布语义：pending 行同路径也只更新字段，不触碰 status）
+  });
+  it('冒烟修复：dupToUpdate 混用拦截——跨分类 patch 的 final pair 过形态归一（flat 丢垃圾 term）', async () => {
+    // 病灶：既有 媒体创作/剪辑能手 行被扩展再收藏并 patch taxonomy=常用推荐（flat，term 字段空不覆盖）。
+    // 修复前 final term '剪辑能手' 原样写入 → 常用推荐 混用 → 发布与 /data/webstack.yml 同时被毒化。
+    const a = await mkSite('https://mixblock1.invalid', { title: '剪辑能手站', taxonomy: '媒体创作', term: '剪辑能手' });
+    await mkSite('https://mixblock2.invalid', { title: '推荐底站', taxonomy: '常用推荐' }); // (常用推荐,'') 两源 flat 证据
+    const res = await postYaml(yamlBody({ title: '剪辑能手站', url: 'https://mixblock1.invalid', taxonomy: '常用推荐' }));
+    expect(res.status).toBe(204);
+    const list = await jf(await dev.fetch('/api/admin/sites?q=mixblock1', { headers: auth }));
+    expect(list.sites[0]).toMatchObject({ taxonomy: '常用推荐', term: '' }); // final term 归一为 ''
+    const cats = (await jf(await dev.fetch('/api/admin/categories', { headers: auth }))).categories;
+    expect(cats.some((c: any) => c.taxonomy === '常用推荐' && c.term === '剪辑能手')).toBe(false); // 不得写入混用形态
+    await dev.fetch(`/api/admin/sites/${a.id}`, { method: 'DELETE', headers: auth }); // 清理
   });
   it('pending 行重复收藏 → 更新字段但仍 pending', async () => {
     const res = await postYaml(yamlBody({ title: '待审一', url: 'https://duppending.invalid', taxonomy: 'EXT' }));
@@ -201,6 +216,17 @@ describe('DELETE /api/delete（Bearer）', () => {
   it('title 不存在 → 204 幂等（popup 只判 res.ok）', async () => {
     const res = await dev.fetch('/api/delete', { method: 'DELETE', headers: authJson, body: JSON.stringify({ filename: 'webstack.yml', title: '查无此题', kind: 'webstack' }) });
     expect(res.status).toBe(204);
+  });
+  it('冒烟修复：扩展 DELETE 删除成功后清理孤儿 categories（防「删了站还卡发布」复发）', async () => {
+    await mkSite('https://extprune.invalid', { title: '删后孤测', taxonomy: 'EXTPRUNE', term: '子删' });
+    const hasOrphan = async () => {
+      const cats = (await jf(await dev.fetch('/api/admin/categories', { headers: auth }))).categories;
+      return cats.some((c: any) => c.taxonomy === 'EXTPRUNE');
+    };
+    expect(await hasOrphan()).toBe(true);
+    const res = await dev.fetch('/api/delete', { method: 'DELETE', headers: authJson, body: JSON.stringify({ filename: 'webstack.yml', title: '删后孤测', kind: 'webstack' }) });
+    expect(res.status).toBe(204);
+    expect(await hasOrphan()).toBe(false); // (EXTPRUNE,子删) 失去唯一站点行 → categories 孤儿被 prune
   });
 });
 

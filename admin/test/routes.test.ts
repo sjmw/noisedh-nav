@@ -145,6 +145,50 @@ describe('/api/admin/sites CRUD', () => {
   });
 });
 
+describe('冒烟修复：PATCH 形态归一 + 孤儿 categories 清理', () => {
+  it('PATCH：flat 分类塞垃圾 term → 置空；嵌套分类空 term → 未分组（垃圾桶子分类，预期行为）', async () => {
+    const flat = (await getJson(await post('/api/admin/sites', { url: 'https://pnflat.invalid', title: '平', taxonomy: 'PNFLAT' }))).site;
+    const nest = (await getJson(await post('/api/admin/sites', { url: 'https://pnnest.invalid', title: '嵌', taxonomy: 'PNNEST', term: '子甲' }))).site;
+    const p1 = await dev.fetch(`/api/admin/sites/${flat.id}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ term: '垃圾111' }) });
+    expect(p1.status).toBe(200);
+    expect((await getJson(p1)).site.term).toBe('');
+    const p2 = await dev.fetch(`/api/admin/sites/${nest.id}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ term: '' }) });
+    expect(p2.status).toBe(200);
+    expect((await getJson(p2)).site.term).toBe('未分组');
+  });
+  it('PATCH 跨分类移动：final pair 一并归一（嵌套旧 term 遇 flat 目标 → 置空）', async () => {
+    const s = (await getJson(await post('/api/admin/sites', { url: 'https://pncross.invalid', title: '跨', taxonomy: 'PNNEST2', term: '子甲' }))).site;
+    const p = await dev.fetch(`/api/admin/sites/${s.id}`, { method: 'PATCH', headers: authJson, body: JSON.stringify({ taxonomy: 'PNFLAT' }) });
+    expect(p.status).toBe(200);
+    expect((await getJson(p)).site).toMatchObject({ taxonomy: 'PNFLAT', term: '' });
+  });
+  it('admin DELETE 删掉 (taxonomy,term) 最后一行站点 → categories 对应行消失；空壳同清', async () => {
+    const s = (await getJson(await post('/api/admin/sites', { url: 'https://orphan.invalid', title: '孤', taxonomy: '孤儿测试', term: '子孤' }))).site;
+    const cats = (await getJson(await dev.fetch('/api/admin/categories', { headers: auth }))).categories;
+    expect(cats).toContainEqual({ taxonomy: '孤儿测试', term: '子孤', icon: 'fas fa-folder-open fa-lg', sort: 0 });
+    expect((await post('/api/admin/categories', { taxonomy: '空壳类' })).status).toBe(204); // 未知分类放行造空壳
+    await dev.fetch(`/api/admin/sites/${s.id}`, { method: 'DELETE', headers: auth });
+    const after = (await getJson(await dev.fetch('/api/admin/categories', { headers: auth }))).categories;
+    expect(after.some((c: any) => c.taxonomy === '孤儿测试')).toBe(false);
+    expect(after.some((c: any) => c.taxonomy === '空壳类')).toBe(false); // prune 顺带清理无站点支撑的空壳
+  });
+  it('POST categories 形态守卫：flat 造嵌套行 → 400；嵌套补空 term → 400；新子分类/未知分类放行', async () => {
+    expect((await post('/api/admin/categories', { taxonomy: 'PNFLAT', term: '新子' })).status).toBe(400);
+    expect((await post('/api/admin/categories', { taxonomy: 'PNNEST', term: '' })).status).toBe(400);
+    expect((await post('/api/admin/categories', { taxonomy: 'PNNEST', term: '子乙' })).status).toBe(204);
+    expect((await post('/api/admin/categories', { taxonomy: '全新分类999', term: '自带子' })).status).toBe(204);
+  });
+  it('reanalyze 成功终点：原 pair 失去全部站点行后 categories 孤儿被 prune', async () => {
+    const s = (await getJson(await post('/api/admin/sites', { url: 'https://reorph.invalid', title: '重', taxonomy: '重分析孤测', term: '子R' }))).site;
+    const res = await post(`/api/admin/sites/${s.id}/analyze`, {});
+    expect(res.status).toBe(200);
+    const { site } = await getJson(res); // .invalid 不可达 → 降级 未分类；原 pair (重分析孤测,子R) 成孤儿
+    const cats = (await getJson(await dev.fetch('/api/admin/categories', { headers: auth }))).categories;
+    expect(cats.some((c: any) => c.taxonomy === '重分析孤测')).toBe(false);
+    await dev.fetch(`/api/admin/sites/${site.id}`, { method: 'DELETE', headers: auth }); // 清理
+  }, 60_000);
+});
+
 describe('/api/admin/import', () => {
   it('书签 fixture：计数 {added:9,skipped_dup:1,failed:1} 与 items 形状', async () => {
     const res = await post('/api/admin/import', { html: fixtureHtml });
@@ -256,6 +300,7 @@ const makeStubDb = (restoreConflict: boolean) => {
         },
         run: async () => {
           if (sql.startsWith('DELETE FROM sites')) { calls.push('delete'); return {}; }
+          if (sql.startsWith('DELETE FROM categories')) { calls.push('prune'); return {}; } // reanalyze 失败回滚后同样 prune（brief：restore 回滚路径别忘了）
           throw unexpected(sql);
         },
         all: async () => {
@@ -286,14 +331,14 @@ describe('reanalyze 异常回滚与错误外壳（单元级）', () => {
     const res = await analyze(db);
     expect(res.status).toBe(502);
     expect(await getJson(res)).toMatchObject({ error: 'fetch_failed' });
-    expect(calls).toEqual(['get', 'delete', 'dupcheck', 'boom', 'restore']); // 删除后异常 → 回滚插入发生
+    expect(calls).toEqual(['get', 'delete', 'dupcheck', 'boom', 'restore', 'prune']); // 删除后异常 → 回滚插入发生 → 回滚后 prune
   });
   it('回滚插入自身 UNIQUE 冲突 → 不再抛出，仍返回 502 统一信封', async () => {
     const { calls, db } = makeStubDb(true);
     const res = await analyze(db);
     expect(res.status).toBe(502);
     expect(await getJson(res)).toMatchObject({ error: 'fetch_failed' });
-    expect(calls).toEqual(['get', 'delete', 'dupcheck', 'boom', 'restore']);
+    expect(calls).toEqual(['get', 'delete', 'dupcheck', 'boom', 'restore', 'prune']);
   });
   it('路由体内无兜底位置抛异常 → 错误外壳产出 500 JSON {error:fetch_failed}（而非 Cloudflare 纯文本）', async () => {
     const brokenDb = { prepare: () => { throw new Error('D1 完全不可用'); } } as unknown as D1Database;

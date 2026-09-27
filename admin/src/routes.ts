@@ -8,6 +8,7 @@ import { normalizeUrl } from './url';
 import { analyzeAndUpsert } from './pipeline';
 import { doPublish } from './publish';
 import { jsonError, errStatus, readJsonBody } from './errors';
+import { categoryShapePairs, resolveCategoryShape, shapeOfTaxonomy, pruneOrphanCategories } from './category';
 import {
   listSites, getSiteById, insertSite, updateSite, deleteSite,
   allCategories, upsertCategory, deleteCategory,
@@ -121,6 +122,17 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
         if (patch.url_raw === undefined) patch.url_raw = raw;
         patch.url = norm; // url 列语义 = 规范化去重键，服务端统一规范化
       }
+      // 集成点 3：patch 触碰 taxonomy/term 时对 existing+patch 合并后的 final pair 做形态归一再落库。
+      // 例：嵌套旧 term 被 patch 进 flat 目标分类 → term 置空，不写入混用形态；嵌套分类清空 term → '未分组'。
+      if (patch.taxonomy !== undefined || patch.term !== undefined) {
+        const existing = await getSiteById(db, id);
+        if (!existing) return jsonError('bad_request', '站点不存在', 404);
+        const finalTax = patch.taxonomy !== undefined ? (patch.taxonomy as string) : existing.taxonomy;
+        const finalTerm = patch.term !== undefined ? (patch.term as string) : existing.term;
+        const resolved = await resolveCategoryShape(db, finalTax, finalTerm);
+        patch.taxonomy = resolved.taxonomy;
+        patch.term = resolved.term;
+      }
       let row: SiteRow | null;
       try {
         row = await updateSite(db, id, patch as SitePatch);
@@ -135,6 +147,7 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
     }
     if (req.method === 'DELETE') {
       await deleteSite(db, id); // 幂等：不存在也 204
+      await pruneOrphanCategories(db); // 孤儿清理：站点消失后失去支撑的 categories 行（含降级空壳）一并删除
       return new Response(null, { status: 204 });
     }
     return fail('bad_request', '方法不支持');
@@ -146,9 +159,17 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
     if (req.method === 'POST') {
       const body = await readJsonBody(req);
       if (!body || typeof body.taxonomy !== 'string' || body.taxonomy.trim() === '') return fail('bad_request', '需要 {taxonomy:string,...}');
+      const tax = body.taxonomy.trim();
+      const termIn = typeof body.term === 'string' ? body.term.trim() : '';
+      // 集成点 4：显式管理端点用拒绝而非静默改写（更诚实）。已有相反形态行 → 400；未知分类放行。
+      // flat 且补空 term（=既有形态）放行；嵌套/mixed 加非空子分类放行（新子分类自动新增=用户裁决）。
+      const shape = shapeOfTaxonomy(await categoryShapePairs(db), tax);
+      if ((termIn === '' && (shape === 'nested' || shape === 'mixed')) || (termIn !== '' && shape === 'flat')) {
+        return fail('bad_request', `分类「${tax}」既有形态为 ${shape}，与本次 {term:${termIn === '' ? "''" : termIn}} 相反；请先修正既有行，不提供半混用形态`);
+      }
       const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
       const sort = typeof body.sort === 'number' && Number.isFinite(body.sort) ? Math.trunc(body.sort) : undefined;
-      await upsertCategory(db, { taxonomy: body.taxonomy.trim(), term: str(body.term), icon: str(body.icon), sort });
+      await upsertCategory(db, { taxonomy: tax, term: str(body.term), icon: str(body.icon), sort });
       return new Response(null, { status: 204 });
     }
     if (req.method === 'DELETE') {
@@ -220,6 +241,7 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
       const r = await analyzeAndUpsert({ url: orig.url, source: orig.source }, env, db);
       if (!r.ok) {
         await restore();
+        await pruneOrphanCategories(db); // 回滚终点：orig 原样回插，孤儿集合不因这次失败变化，照 prune 顺带清历史空壳
         return fail(r.code, '重新分析失败');
       }
       // 重分析不改发布状态与排序（人工确认语义由 PATCH/publish 承担）；
@@ -227,10 +249,12 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
       // 新行 url_raw 烤成规范化键（seed-dup 行含 #seed-dup-N 尾巴），而展示与导出走 url_raw（src/yml.ts
       // 的 q(r.url_raw || r.url)）——不回写原值等于把 dedup 尾巴发布上线。
       const kept: SiteRow = (await updateSite(db, r.row.id, { status: orig.status, sort: orig.sort, url_raw: orig.url_raw })) ?? r.row;
+      await pruneOrphanCategories(db); // 成功终点：原 pair 若失去全部站点行，其 categories 孤儿一并清除
       return json({ site: kept });
     } catch (e) {
       // analyzeAndUpsert/回写阶段抛异常：原行已删，必须先回滚再报 502（code 枚举无 internal，取 fetch_failed 承载内部失败）
       await restore();
+      await pruneOrphanCategories(db); // restore 回滚路径同样 prune（brief 点名；原行回插后孤儿判定基准已恢复）
       console.error('reanalyze threw:', id, e);
       return fail('fetch_failed', '重新分析失败');
     }
