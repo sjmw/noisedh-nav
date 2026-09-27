@@ -60,13 +60,14 @@ export async function resolveCategoryShape(
   return { taxonomy: tax, term: '' }; // flat：垃圾子分类静默丢弃，保住分类本身
 }
 
-// 孤儿清理：categories 中无 (taxonomy, term) 精确匹配 sites 行的行删除。
+// 孤儿清理：categories 中无 (taxonomy, term) 精确匹配 sites 行的「非空 term」行删除。
+// term='' header 行豁免——它承载 icon/顶层排序，站点里本就可能没有 term='' 支撑行，删了会丢 icon 与排序（控制器裁决）。
 // 调用点仅限「sites 行消失/换形之后」：admin DELETE、extension DELETE、reanalyze 两终点；
 // 绝不在 reanalyze 中途（删原行后、重插前）调用——那时原行不在，正常分类行会被误删。
 export async function pruneOrphanCategories(db: D1Database): Promise<void> {
   await db
     .prepare(
-      `DELETE FROM categories WHERE NOT EXISTS (SELECT 1 FROM sites WHERE sites.taxonomy = categories.taxonomy AND sites.term = categories.term)`,
+      `DELETE FROM categories WHERE term != '' AND NOT EXISTS (SELECT 1 FROM sites WHERE sites.taxonomy = categories.taxonomy AND sites.term = categories.term)`,
     )
     .run();
 }

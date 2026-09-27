@@ -143,9 +143,9 @@ describe('POST /api/yaml（收藏写入，Bearer）', () => {
   it('冒烟修复：dupToUpdate 混用拦截——跨分类 patch 的 final pair 过形态归一（flat 丢垃圾 term）', async () => {
     // 病灶：既有 媒体创作/剪辑能手 行被扩展再收藏并 patch taxonomy=常用推荐（flat，term 字段空不覆盖）。
     // 修复前 final term '剪辑能手' 原样写入 → 常用推荐 混用 → 发布与 /data/webstack.yml 同时被毒化。
-    const a = await mkSite('https://mixblock1.invalid', { title: '剪辑能手站', taxonomy: '媒体创作', term: '剪辑能手' });
-    await mkSite('https://mixblock2.invalid', { title: '推荐底站', taxonomy: '常用推荐' }); // (常用推荐,'') 两源 flat 证据
-    const res = await postYaml(yamlBody({ title: '剪辑能手站', url: 'https://mixblock1.invalid', taxonomy: '常用推荐' }));
+    const a = await mkSite('https://mixblock1.test', { title: '剪辑能手站', taxonomy: '媒体创作', term: '剪辑能手' });
+    await mkSite('https://mixblock2.test', { title: '推荐底站', taxonomy: '常用推荐' }); // (常用推荐,'') 两源 flat 证据
+    const res = await postYaml(yamlBody({ title: '剪辑能手站', url: 'https://mixblock1.test', taxonomy: '常用推荐' }));
     expect(res.status).toBe(204);
     const list = await jf(await dev.fetch('/api/admin/sites?q=mixblock1', { headers: auth }));
     expect(list.sites[0]).toMatchObject({ taxonomy: '常用推荐', term: '' }); // final term 归一为 ''
@@ -218,7 +218,7 @@ describe('DELETE /api/delete（Bearer）', () => {
     expect(res.status).toBe(204);
   });
   it('冒烟修复：扩展 DELETE 删除成功后清理孤儿 categories（防「删了站还卡发布」复发）', async () => {
-    await mkSite('https://extprune.invalid', { title: '删后孤测', taxonomy: 'EXTPRUNE', term: '子删' });
+    await mkSite('https://extprune.test', { title: '删后孤测', taxonomy: 'EXTPRUNE', term: '子删' });
     const hasOrphan = async () => {
       const cats = (await jf(await dev.fetch('/api/admin/categories', { headers: auth }))).categories;
       return cats.some((c: any) => c.taxonomy === 'EXTPRUNE');

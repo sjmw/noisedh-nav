@@ -79,8 +79,8 @@ describe('resolveCategoryShape：策略表逐行', () => {
   });
 });
 
-describe('pruneOrphanCategories：删除无站点支撑的 categories 行', () => {
-  it('精确 (taxonomy,term) 无 sites 行 → 删；有 → 留；顺带清 未分类 空壳', async () => {
+describe('pruneOrphanCategories：删除无站点支撑的 categories 行（term=\'\'  header 行豁免）', () => {
+  it('精确 (taxonomy,term) 无 sites 行 → 删；有 → 留；未分类 空壳（term=\'\'）按新语义豁免保留', async () => {
     await site('K', '');
     await site('K', '子K');
     await upsertCategory(db, { taxonomy: 'K', term: '' });
@@ -90,6 +90,17 @@ describe('pruneOrphanCategories：删除无站点支撑的 categories 行', () =
     await pruneOrphanCategories(db);
     const cats = await allCategories(db);
     expect(cats.filter((c: any) => c.taxonomy === 'K').map((c: any) => c.term).sort()).toEqual(['', '子K']);
-    expect(cats.some((c: any) => c.taxonomy === '未分类')).toBe(false);
+    // 控制器裁决：prune 只清非空 term 的孤儿，永不删 term='' 行——header 行承载 icon/顶层排序，删了会丢
+    expect(cats.some((c: any) => c.taxonomy === '未分类')).toBe(true);
+  });
+
+  it("嵌套分类的 term='' header 行（icon/sort 承载）即使无同名站点行也豁免保留", async () => {
+    await site('NT', '子B'); // sites 侧只有 (NT,子B)，没有任何 term='' 站点行
+    await upsertCategory(db, { taxonomy: 'NT', term: '', icon: 'fas fa-star fa-lg', sort: 7 }); // 旧实现必误删此行
+    await upsertCategory(db, { taxonomy: 'NT', term: '子A' }); // 真孤儿：无 (NT,子A) 站点行
+    await pruneOrphanCategories(db);
+    const cats = (await allCategories(db)).filter((c: any) => c.taxonomy === 'NT');
+    expect(cats.map((c: any) => c.term)).toEqual(['']); // 子A 被删，header 保留
+    expect(cats[0]).toMatchObject({ icon: 'fas fa-star fa-lg', sort: 7 }); // icon/排序未丢
   });
 });

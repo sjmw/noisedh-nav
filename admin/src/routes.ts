@@ -147,7 +147,7 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
     }
     if (req.method === 'DELETE') {
       await deleteSite(db, id); // 幂等：不存在也 204
-      await pruneOrphanCategories(db); // 孤儿清理：站点消失后失去支撑的 categories 行（含降级空壳）一并删除
+      await pruneOrphanCategories(db); // 孤儿清理：站点消失后失去支撑的非空 term categories 行删除（term='' header 豁免，承载 icon/排序）
       return new Response(null, { status: 204 });
     }
     return fail('bad_request', '方法不支持');
@@ -255,7 +255,7 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
       const r = await analyzeAndUpsert({ url: orig.url, source: orig.source }, env, db);
       if (!r.ok) {
         await restore();
-        await pruneOrphanCategories(db); // 回滚终点：orig 原样回插，孤儿集合不因这次失败变化，照 prune 顺带清历史空壳
+        await pruneOrphanCategories(db); // 回滚终点：orig 原样回插，孤儿集合不因这次失败变化，照 prune 顺带清历史非空 term 孤儿（term='' 豁免）
         return fail(r.code, '重新分析失败');
       }
       // 重分析不改发布状态与排序（人工确认语义由 PATCH/publish 承担）；
