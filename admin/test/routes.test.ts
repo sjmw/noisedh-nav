@@ -685,6 +685,96 @@ describe('categories 管理（Task 7）', () => {
   });
 });
 
+// ── Task 8：POST /api/admin/sites/batch-delete 三形态（ids/filter/wipe 互斥）──
+// 三形态各删的是「路由白名单」目标；wipe 是全表删——本 describe 是最后一个依赖 dev-server sites 的用例组，
+// 其后仅「reanalyze 单元级」（stub DB，不碰 dev-server），故 wipe 收尾安全。
+describe('sites/batch-delete 三形态（Task 8）', () => {
+  const bd = (body: unknown) => post('/api/admin/sites/batch-delete', body);
+  const sitesTotal = async (): Promise<number> =>
+    (await getJson(await dev.fetch('/api/admin/sites?perPage=1', { headers: auth }))).total;
+  // 直通造数（title+taxonomy 同给零网络，同 Task 7 mk）
+  const mk = async (url: string, taxonomy: string, title = 'T', term?: string) =>
+    (await getJson(await post('/api/admin/sites', { url, title, taxonomy, ...(term ? { term } : {}) }))).site as { id: number };
+
+  it('行为1：{ids:[a,b]} → {deleted:2} 且行消失；含不存在 id 按实删（不报错）', async () => {
+    const a = (await mk('https://bd1-a.test', 'BD批删')).id;
+    const b = (await mk('https://bd1-b.test', 'BD批删')).id;
+    const keep = (await mk('https://bd1-keep.test', 'BD批删')).id;
+    const res = await bd({ ids: [a, b] });
+    expect(res.status).toBe(200);
+    expect(await getJson(res)).toEqual({ deleted: 2 });
+    const left = await getJson(await dev.fetch('/api/admin/sites?taxonomy=BD批删', { headers: auth }));
+    expect(left.total).toBe(1);
+    expect(left.sites[0].id).toBe(keep);
+    // 混入不存在 id：只删实存的那一个，不报错
+    const mix = await bd({ ids: [keep, 999999] });
+    expect(mix.status).toBe(200);
+    expect(await getJson(mix)).toEqual({ deleted: 1 });
+  });
+
+  it('行为2：{filter:{taxonomy}} 只删该分类；{filter:{q}} LIKE 同 GET 语义（含通配符转义）', async () => {
+    await mk('https://bd2-jia-a.test', 'BD筛甲');
+    await mk('https://bd2-jia-b.test', 'BD筛甲');
+    await mk('https://bd2-yi.test', 'BD筛乙');
+    const r1 = await bd({ filter: { taxonomy: 'BD筛甲' } });
+    expect(r1.status).toBe(200);
+    expect(await getJson(r1)).toEqual({ deleted: 2 }); // 只删该分类
+    expect((await getJson(await dev.fetch('/api/admin/sites?taxonomy=BD筛甲', { headers: auth }))).total).toBe(0);
+    expect((await getJson(await dev.fetch('/api/admin/sites?taxonomy=BD筛乙', { headers: auth }))).total).toBe(1); // 他类不动
+    // q 语义与 GET 一致（转义同 sitesWhere）：普通关键词
+    const hit = await bd({ filter: { q: 'bd2-yi' } }); // url 含 bd2-yi
+    expect(hit.status).toBe(200);
+    expect(await getJson(hit)).toEqual({ deleted: 1 });
+    // 通配符转义：下划线当字面量——q='下_划' 只命中 title 含「下_划」的行，不误匹配「下X划」
+    const x1 = (await mk('https://bd2-us.test', 'BD筛丙', '下_划线')).id;
+    await mk('https://bd2-usx.test', 'BD筛丙', '下X划线');
+    const before = await getJson(await dev.fetch('/api/admin/sites?q=%E4%B8%8B_%E5%88%92', { headers: auth }));
+    expect(before.total).toBe(1); // GET 侧取证：转义后只 1 命中（若未转义，'下_划' 的 _ 会通配 '下X划' → 命中 2）
+    expect(before.sites[0].id).toBe(x1);
+    const esc = await bd({ filter: { q: '下_划' } });
+    expect(esc.status).toBe(200);
+    expect(await getJson(esc)).toEqual({ deleted: 1 }); // 与 GET 同口径：实删 1
+    const remain = await getJson(await dev.fetch('/api/admin/sites?taxonomy=BD筛丙', { headers: auth }));
+    expect(remain.total).toBe(1);
+    expect(remain.sites[0].title).toBe('下X划线'); // 未被误删
+  });
+
+  it('行为3：互斥与校验——{} 400；ids+filter 同现 400；ids 非数组/0/负/小数 400；filter 空对象/白名单外键 400（绝不空 opts 清表）', async () => {
+    const seed = await mk('https://bd3.test', 'BD校验');
+    // 显式形态缺失 / 多形态同现 → 400，零删除
+    expect((await bd({})).status).toBe(400);
+    expect((await bd({ ids: [seed.id], filter: { taxonomy: 'BD校验' } })).status).toBe(400); // 两形态
+    expect((await bd({ ids: [seed.id], wipe: '全部删除' })).status).toBe(400);
+    // ids 非法形态
+    expect((await bd({ ids: 'nope' })).status).toBe(400); // 非数组
+    expect((await bd({ ids: [] })).status).toBe(400); // 空数组
+    expect((await bd({ ids: [0] })).status).toBe(400);
+    expect((await bd({ ids: [-1] })).status).toBe(400);
+    expect((await bd({ ids: [1.5] })).status).toBe(400);
+    // filter 安全闸（T1 review）：空对象 / 白名单外键 / 全空值 → 400，绝不落到全表删
+    expect((await bd({ filter: {} })).status).toBe(400);
+    expect((await bd({ filter: { bogus: 'x' } })).status).toBe(400);
+    expect((await bd({ filter: { taxonomy: '' } })).status).toBe(400);
+    expect((await bd({ filter: 'nope' })).status).toBe(400); // filter 非对象
+    // 所有 400 路径零删除：seed 行仍在，且全表总数未因任一非法请求而变小
+    const still = await getJson(await dev.fetch('/api/admin/sites?taxonomy=BD校验', { headers: auth }));
+    expect(still.total).toBe(1);
+    expect(still.sites[0].id).toBe(seed.id);
+  });
+
+  it('行为4：wipe 逐字确认——{wipe:"手滑"} 400 零删；{wipe:"全部删除"} 全表删（deleted=当前总数，随后为 0）', async () => {
+    const bad = await bd({ wipe: '手滑' });
+    expect(bad.status).toBe(400);
+    expect((await getJson(bad)).error).toBe('bad_request');
+    const before = await sitesTotal();
+    expect(before).toBeGreaterThan(0); // 前序 fixture 沉淀（本用例在末位，收尾安全）
+    const ok = await bd({ wipe: '全部删除' });
+    expect(ok.status).toBe(200);
+    expect(await getJson(ok)).toEqual({ deleted: before }); // 全库删
+    expect(await sitesTotal()).toBe(0);
+  });
+});
+
 // ── 单元级：reanalyze 抛异常回滚 + 顶层错误外壳 ──
 // 集成环境（unstable_dev）里流水线没有自然抛异常的路径：.invalid 抓取走降级返回（ok:false）而非 throw，
 // 也无法在「删除之后」注入 D1 故障——故直接调用 handleAdmin，用按 SQL 前缀分派的 D1 假件驱动该分支。

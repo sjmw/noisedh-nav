@@ -16,6 +16,7 @@ import {
   allFriendlinks, insertFriendlink, updateFriendlink, deleteByIds,
   allNavitems, insertNavitem, updateNavitem, getNavitemById, countNavChildren,
   countSitesByPair, countSitesByTaxonomy, renameTaxonomy, renameTerm,
+  deleteSitesByIds, deleteSitesByFilter,
 } from './db';
 import type { SitePatch } from './db';
 import type { Env, SiteRow, CategoryRow, NavitemRow } from './types';
@@ -95,6 +96,33 @@ async function routeAdmin(req: Request, u: URL, env: Env): Promise<Response | nu
     // 体积闸按解码后 html 的 UTF-8 字节数计（spec §4.1，10MB）
     if (new TextEncoder().encode(body.html).length > MAX_IMPORT_BYTES) return fail('too_large', 'html 超过 10MB 上限');
     return handleImport(body.html);
+  }
+
+  // ── sites 批删三形态（Task 8）：置于 /:id 正则之前，避免 'batch-delete' 被当成 id ──
+  // 互斥：{ids:[…]} xor {filter:{…}} xor {wipe:'全部删除'}；恰好其一，否则 400（防无参误删）。
+  if (p === '/api/admin/sites/batch-delete' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    if (!body) return fail('bad_request', '需要 JSON 对象');
+    const forms = [body.wipe !== undefined, Array.isArray(body.ids), body.filter !== undefined];
+    if (forms.filter(Boolean).length !== 1) return fail('bad_request', '需三选一：{ids:[…]} | {filter:{…}} | {wipe:"全部删除"}');
+    if (body.wipe !== undefined) {
+      if (body.wipe !== '全部删除') return fail('bad_request', '清空全库需 {wipe:"全部删除"} 逐字确认');
+      return json({ deleted: await deleteSitesByFilter(db, {}) }); // wipe 是唯一显式全表删路径（需逐字确认）
+    }
+    if (Array.isArray(body.ids)) {
+      const ids = body.ids as unknown[];
+      if (!ids.length || !ids.every((n) => Number.isInteger(n) && (n as number) > 0)) return fail('bad_request', 'ids 需为非空正整数数组');
+      return json({ deleted: await deleteSitesByIds(db, ids as number[]) });
+    }
+    const f = body.filter as Record<string, unknown>;
+    if (typeof f !== 'object' || f === null) return fail('bad_request', 'filter 需为对象');
+    // 安全闸（T1 review）：filter 键白名单 + 至少一个非空条件——空 opts 会经 sitesWhere 清全表，唯 wipe 可全删。
+    const FILTER_KEYS = ['q', 'status', 'taxonomy', 'term'] as const;
+    for (const k of Object.keys(f)) if (!FILTER_KEYS.includes(k as (typeof FILTER_KEYS)[number])) return fail('bad_request', `filter 含白名单外的键：${k}`);
+    const s = (k: (typeof FILTER_KEYS)[number]) => (typeof f[k] === 'string' && (f[k] as string) !== '' ? (f[k] as string) : undefined);
+    const opts = { q: s('q'), status: s('status'), taxonomy: s('taxonomy'), term: s('term') };
+    if (Object.values(opts).every((v) => v === undefined)) return fail('bad_request', 'filter 需至少一个非空条件（q/status/taxonomy/term）');
+    return json({ deleted: await deleteSitesByFilter(db, opts) });
   }
 
   // ── sites/:id 与 sites/:id/analyze ──
