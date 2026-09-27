@@ -4,6 +4,7 @@
 import { normalizeUrl } from './url';
 import { fetchPage, extractBaseline } from './extract';
 import { aiAnalyze } from './ai';
+import { categoryShapePairs, resolveCategoryShape } from './category';
 import { getSiteByUrl, insertSite, upsertCategory, allCategories } from './db';
 import type { AiResult } from './ai';
 import type { CategoryRow, Env, SiteRow } from './types';
@@ -64,13 +65,19 @@ export async function analyzeAndUpsert(
     description = trim(opts.description);
     term = trim(opts.term);
   } else {
+    // AI 传参 union 化（冒烟修复轮）：分类全集与子分类清单都取 categories∪sites，
+    // 不再只喂 categories 表（历史上只有 3 行，AI 面对 381 行的真实形态是瞎的）。
+    const pairs = await categoryShapePairs(db);
+    const aiCategories = [...new Set(pairs.map((p) => p.taxonomy))];
+    const subcategories: Record<string, string[]> = {};
+    for (const p of pairs) if (p.term !== '') (subcategories[p.taxonomy] ??= []).push(p.term);
     const page = await fetchPage(url, fetchImpl);
     const html = 'html' in page ? page.html : '';
     const base = html === '' ? baseline : extractBaseline(html);
     const aiOk: AiResult | null =
       html !== '' && env.AI_BASE_URL && env.AI_API_KEY && env.AI_MODEL
         ? await aiAnalyze(
-            { url, pageText: buildPageText(html), baselineTitle: base.title, categories: [...new Set(cats.map((c) => c.taxonomy))] },
+            { url, pageText: buildPageText(html), baselineTitle: base.title, categories: aiCategories, subcategories },
             env,
             fetchImpl,
           )
@@ -95,6 +102,9 @@ export async function analyzeAndUpsert(
     if (eTax !== '') taxonomy = eTax;
     if (trim(opts.term) !== '') term = trim(opts.term);
   }
+
+  // 最终 (taxonomy, term) 落库前形态归一——直通 / AI / hint 覆盖三条分支的汇合处统一收口（集成点 1）。
+  ({ taxonomy, term } = await resolveCategoryShape(db, taxonomy, term));
 
   let logo = trim(opts.logo);
   if (logo === '' && env.FAVICON_TEMPLATE) logo = env.FAVICON_TEMPLATE.replace(/\{host\}/g, host);
