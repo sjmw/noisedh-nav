@@ -23,6 +23,8 @@ const ghHeaders = (token: string): Record<string, string> => ({
   Authorization: `Bearer ${token}`, // 任何日志/错误消息均不携带该头
   Accept: 'application/vnd.github+json',
   'X-GitHub-Api-Version': '2022-11-28',
+  // GitHub 强制 User-Agent 政策：缺 UA 的请求一律 403（2026-09-27 部署实测：同 IP 同令牌仅去 UA → 200→403）
+  'User-Agent': 'noisedh-admin (Cloudflare Worker; +https://github.com/sjmw/noisedh-nav)',
 });
 
 export function b64DecodeUtf8(b64: string): string {

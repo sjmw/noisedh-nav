@@ -55,6 +55,7 @@ describe('github.ts：Contents 读写与 UTF-8 编解码', () => {
     expect(calls[0]!.method).toBe('GET');
     expect(calls[0]!.headers.authorization).toBe('Bearer ghtok');
     expect(calls[0]!.headers.accept).toContain('application/vnd.github+json');
+    expect(calls[0]!.headers['user-agent']).toBeTruthy(); // GitHub UA 强制政策：无 UA 一律 403（2026-09-27 部署实测）
     // 负面守卫：证明本用例确实能捕获 latin1 坑（plain atob 产出与 UTF-8 文本不同）
     expect(atob(wrap(b64(YML_CN)))).not.toBe(YML_CN);
   });
@@ -68,6 +69,7 @@ describe('github.ts：Contents 读写与 UTF-8 编解码', () => {
     expect(calls[0]!.method).toBe('PUT');
     expect(calls[0]!.headers.authorization).toBe('Bearer ghtok');
     expect(calls[0]!.headers.accept).toContain('application/vnd.github+json');
+    expect(calls[0]!.headers['user-agent']).toBeTruthy(); // 同上：PUT 也必须带 UA
     const body = JSON.parse(calls[0]!.body);
     expect(body.branch).toBe('main');
     expect(body.sha).toBe('sha-remote-1'); // sha 透传
