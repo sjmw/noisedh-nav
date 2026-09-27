@@ -22,6 +22,10 @@ export interface CategoryRow {
   sort: number;
 }
 
+// 管理扩展轮（spec-27）：与 schema.sql friendlinks/navitems 表逐字段一致
+export interface FriendlinkRow { id: number; title: string; url: string; description: string; sort: number; created_at: string; updated_at: string }
+export interface NavitemRow { id: number; item: string; icon: string; link: string; parent_id: number | null; sort: number; created_at: string; updated_at: string }
+
 export interface Env {
   ADMIN_TOKEN: string;
   GITHUB_TOKEN: string;

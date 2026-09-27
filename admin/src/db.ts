@@ -1,7 +1,7 @@
 // D1 访问助手：全部单语句（无多语句拼接），写语句统一带 updated_at=datetime('now')（sites 表）。
 // db 参数由 Worker 注入（env.DB），本模块零 npm 运行时依赖，仅类型引用 @cloudflare/workers-types。
 
-import type { SiteRow, CategoryRow } from './types';
+import type { SiteRow, CategoryRow, FriendlinkRow, NavitemRow } from './types';
 
 export async function getSiteByUrl(db: D1Database, url: string): Promise<SiteRow | null> {
   return (await db.prepare('SELECT * FROM sites WHERE url = ?').bind(url).first<SiteRow>()) ?? null;
@@ -51,17 +51,7 @@ export interface ListOpts {
 }
 
 export async function listSites(db: D1Database, opts: ListOpts = {}): Promise<{ rows: SiteRow[]; total: number }> {
-  const where: string[] = [];
-  const vals: (string | number)[] = [];
-  if (opts.status) { where.push('status = ?'); vals.push(opts.status); }
-  if (opts.taxonomy) { where.push('taxonomy = ?'); vals.push(opts.taxonomy); }
-  if (opts.term) { where.push('term = ?'); vals.push(opts.term); }
-  if (opts.q) {
-    const like = `%${opts.q.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
-    where.push(`(title LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')`);
-    vals.push(like, like, like);
-  }
-  const w = where.length ? ` WHERE ${where.join(' AND ')}` : '';
+  const { w, vals } = sitesWhere(opts);
   const page = Math.max(1, Math.trunc(opts.page ?? 1));
   const perPage = Math.min(200, Math.max(1, Math.trunc(opts.perPage ?? 50)));
   const total = (await db.prepare(`SELECT COUNT(*) AS n FROM sites${w}`).bind(...vals).first<{ n: number }>())?.n ?? 0;
@@ -117,4 +107,109 @@ export async function upsertCategory(db: D1Database, cat: { taxonomy: string; te
 
 export async function deleteCategory(db: D1Database, taxonomy: string, term: string): Promise<void> {
   await db.prepare('DELETE FROM categories WHERE taxonomy = ? AND term = ?').bind(taxonomy, term).run();
+}
+
+// ── 管理扩展轮（spec-27）：friendlinks / navitems / 批量删 / 分类级联改名 ──
+export async function allFriendlinks(db: D1Database): Promise<FriendlinkRow[]> {
+  const { results } = await db.prepare('SELECT * FROM friendlinks ORDER BY sort, id').all<FriendlinkRow>();
+  return results;
+}
+export async function insertFriendlink(db: D1Database, r: Omit<FriendlinkRow, 'id' | 'created_at' | 'updated_at'>): Promise<FriendlinkRow> {
+  const row = await db.prepare('INSERT INTO friendlinks (title, url, description, sort) VALUES (?, ?, ?, ?) RETURNING *')
+    .bind(r.title, r.url, r.description, r.sort).first<FriendlinkRow>();
+  if (!row) throw new Error('insertFriendlink: RETURNING 行缺失');
+  return row;
+}
+const FL_MUTABLE = ['title', 'url', 'description', 'sort'] as const;
+export async function updateFriendlink(db: D1Database, id: number, patch: Partial<Pick<FriendlinkRow, (typeof FL_MUTABLE)[number]>>): Promise<FriendlinkRow | null> {
+  const keys = FL_MUTABLE.filter((k) => patch[k] !== undefined);
+  if (!keys.length) return getFriendlinkById(db, id);
+  const sets = [...keys.map((k) => `${k} = ?`), `updated_at = datetime('now')`].join(', ');
+  return (await db.prepare(`UPDATE friendlinks SET ${sets} WHERE id = ? RETURNING *`).bind(...keys.map((k) => patch[k] as never), id).first<FriendlinkRow>()) ?? null;
+}
+export async function getFriendlinkById(db: D1Database, id: number): Promise<FriendlinkRow | null> {
+  return (await db.prepare('SELECT * FROM friendlinks WHERE id = ?').bind(id).first<FriendlinkRow>()) ?? null;
+}
+export async function deleteFriendlink(db: D1Database, id: number): Promise<void> {
+  await db.prepare('DELETE FROM friendlinks WHERE id = ?').bind(id).run();
+}
+// 表名白名单内插值（非用户输入），ids 全为绑定参数
+export async function deleteByIds(db: D1Database, table: 'friendlinks' | 'navitems', ids: number[]): Promise<number> {
+  let n = 0;
+  for (let i = 0; i < ids.length; i += 90) {
+    const chunk = ids.slice(i, i + 90);
+    const out = await db.prepare(`DELETE FROM ${table} WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).run();
+    n += (out.meta as { changes?: number }).changes ?? 0;
+  }
+  return n;
+}
+// navitems：顶层按 (sort,id)，子项紧跟其父（父缺失时孤儿子项也保留，排在尾部同 key）
+export async function allNavitems(db: D1Database): Promise<NavitemRow[]> {
+  const { results } = await db.prepare(
+    `SELECT * FROM navitems ORDER BY COALESCE(parent_id, id), parent_id IS NOT NULL, sort, id`,
+  ).all<NavitemRow>();
+  return results;
+}
+export async function insertNavitem(db: D1Database, r: Omit<NavitemRow, 'id' | 'created_at' | 'updated_at'>): Promise<NavitemRow> {
+  const row = await db.prepare('INSERT INTO navitems (item, icon, link, parent_id, sort) VALUES (?, ?, ?, ?, ?) RETURNING *')
+    .bind(r.item, r.icon, r.link, r.parent_id, r.sort).first<NavitemRow>();
+  if (!row) throw new Error('insertNavitem: RETURNING 行缺失');
+  return row;
+}
+const NV_MUTABLE = ['item', 'icon', 'link', 'parent_id', 'sort'] as const;
+export async function updateNavitem(db: D1Database, id: number, patch: Partial<Pick<NavitemRow, (typeof NV_MUTABLE)[number]>>): Promise<NavitemRow | null> {
+  const keys = NV_MUTABLE.filter((k) => patch[k] !== undefined);
+  if (!keys.length) return getNavitemById(db, id);
+  const sets = [...keys.map((k) => `${k} = ?`), `updated_at = datetime('now')`].join(', ');
+  return (await db.prepare(`UPDATE navitems SET ${sets} WHERE id = ? RETURNING *`).bind(...keys.map((k) => patch[k] as never), id).first<NavitemRow>()) ?? null;
+}
+export async function getNavitemById(db: D1Database, id: number): Promise<NavitemRow | null> {
+  return (await db.prepare('SELECT * FROM navitems WHERE id = ?').bind(id).first<NavitemRow>()) ?? null;
+}
+export async function deleteNavitem(db: D1Database, id: number): Promise<void> {
+  await db.prepare('DELETE FROM navitems WHERE id = ?').bind(id).run();
+}
+export async function countNavChildren(db: D1Database, id: number): Promise<number> {
+  return (await db.prepare('SELECT COUNT(*) AS n FROM navitems WHERE parent_id = ?').bind(id).first<{ n: number }>())?.n ?? 0;
+}
+// sites 批量删：where 构造与 listSites 同源（提取为 sitesWhere，两处复用防漂移）
+export function sitesWhere(opts: ListOpts): { w: string; vals: (string | number)[] } {
+  const where: string[] = []; const vals: (string | number)[] = [];
+  if (opts.status) { where.push('status = ?'); vals.push(opts.status); }
+  if (opts.taxonomy) { where.push('taxonomy = ?'); vals.push(opts.taxonomy); }
+  if (opts.term) { where.push('term = ?'); vals.push(opts.term); }
+  if (opts.q) {
+    const like = `%${opts.q.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
+    where.push(`(title LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')`);
+    vals.push(like, like, like);
+  }
+  return { w: where.length ? ` WHERE ${where.join(' AND ')}` : '', vals };
+}
+export async function deleteSitesByFilter(db: D1Database, opts: ListOpts): Promise<number> {
+  const { w, vals } = sitesWhere(opts);
+  const out = await db.prepare(`DELETE FROM sites${w}`).bind(...vals).run();
+  return (out.meta as { changes?: number }).changes ?? 0;
+}
+export async function deleteSitesByIds(db: D1Database, ids: number[]): Promise<number> {
+  let n = 0;
+  for (let i = 0; i < ids.length; i += 90) {
+    const chunk = ids.slice(i, i + 90);
+    const out = await db.prepare(`DELETE FROM sites WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).run();
+    n += (out.meta as { changes?: number }).changes ?? 0;
+  }
+  return n;
+}
+export async function countSitesByPair(db: D1Database, taxonomy: string, term: string): Promise<number> {
+  return (await db.prepare('SELECT COUNT(*) AS n FROM sites WHERE taxonomy = ? AND term = ?').bind(taxonomy, term).first<{ n: number }>())?.n ?? 0;
+}
+export async function countSitesByTaxonomy(db: D1Database, taxonomy: string): Promise<number> {
+  return (await db.prepare('SELECT COUNT(*) AS n FROM sites WHERE taxonomy = ?').bind(taxonomy).first<{ n: number }>())?.n ?? 0;
+}
+export async function renameTaxonomy(db: D1Database, from: string, to: string): Promise<void> {
+  await db.prepare('UPDATE categories SET taxonomy = ? WHERE taxonomy = ?').bind(to, from).run();
+  await db.prepare(`UPDATE sites SET taxonomy = ?, updated_at = datetime('now') WHERE taxonomy = ?`).bind(to, from).run();
+}
+export async function renameTerm(db: D1Database, taxonomy: string, from: string, to: string): Promise<void> {
+  await db.prepare('UPDATE categories SET term = ? WHERE taxonomy = ? AND term = ?').bind(to, taxonomy, from).run();
+  await db.prepare(`UPDATE sites SET term = ?, updated_at = datetime('now') WHERE taxonomy = ? AND term = ?`).bind(to, taxonomy, from).run();
 }
