@@ -49,22 +49,11 @@ describe('seed 不变式闸口（真实 webstack.yml 全量 round-trip）', () =
     expect(rebuilt).toEqual(yaml.load(REAL_YML));
   });
 
-  it('导出与原文件仅存在已知的引号风格差异（7 行单引号 vs 双引号），其余逐字节一致', async () => {
+  it('导出与原文件逐字节一致（曾有的 7 行引号风格差异已被 2026-09-27 后台发布 commit 45847f6 归一，现为零漂移）', async () => {
     const rows = await allPublishedRows(db);
     const cats = await allCategories(db);
     const out = buildWebstackYml(rows, cats);
-    const a = out.split('\n');
-    const b = REAL_YML.split('\n');
-    expect(a.length).toBe(b.length);
-    let diffLines = 0;
-    a.forEach((line, i) => {
-      if (line === b[i]) return;
-      diffLines++;
-      // 差异行必须语义相等且仅是 " → ' 的风格差（人工文件历史写法，序列化器统一双引号）
-      expect(yaml.load(line)).toEqual(yaml.load(b[i]));
-      expect(line.replace(/"/g, "'")).toBe(b[i]);
-    });
-    expect(diffLines).toBe(7);
+    expect(out).toBe(REAL_YML);
   });
 
   it('url 列为规范化去重键（seed 行含 url_raw 原样；重复 url 以 #seed-dup-N 后缀保唯一）', async () => {
