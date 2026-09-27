@@ -1,5 +1,6 @@
 // Task 9 seed 生成器（Node 本地脚本，可依赖 js-yaml；与 src/ 的零运行时依赖约束隔离）
-// 仓库根 data/webstack.yml → admin/seed.sql：DELETE 后全量 INSERT，source='seed'、status='published'。
+// 仓库根 data/webstack.yml + data/friendlinks.yml + data/headers.yml（管理扩展 Task 3 三表化）
+//   → admin/seed.sql：DELETE 后全量 INSERT，source='seed'、status='published'。
 // 裁定记录（详见 test/seed.test.mjs 闸口断言）：
 //  (a) sites.url 存 normalizeUrl 结果（去重键），url_raw 存原样；发布导出走 url_raw（见 src/yml.ts）。
 //  (b) 真实文件中 3 个 URL 各出现两次（不同条目、同一规范化键）：UNIQUE(url) 只容首现行，
@@ -48,10 +49,46 @@ export function flattenWebstack(ymlText) {
   return { sites, cats };
 }
 
+/**
+ * 管理扩展轮（Task 3）：data/friendlinks.yml + data/headers.yml → friendlinks/navitems 行集。
+ * 显式 id 按文件序分配（友链 1..n；导航顶层 1..n、子项从 n+1 起接号），
+ * 使子项 parent_id 引用稳定且「先父后子」——SQL 与测试共用本行集，不靠解析 SQL。
+ */
+export function flattenCollections(friendlinksText, headersText) {
+  const flinks = [];
+  if (friendlinksText && friendlinksText.trim()) {
+    const doc = yaml.load(friendlinksText);
+    if (!Array.isArray(doc)) throw new Error('friendlinks.yml 顶层必须是数组');
+    doc.forEach((r, i) => {
+      if (!r || typeof r.title !== 'string') throw new Error(`friendlinks 第 ${i} 项缺少 title`);
+      flinks.push({ title: r.title, url: r.url ?? '', description: r.description ?? '', sort: i });
+    });
+  }
+  const navs = [];
+  if (headersText && headersText.trim()) {
+    const doc = yaml.load(headersText);
+    if (!Array.isArray(doc)) throw new Error('headers.yml 顶层必须是数组');
+    doc.forEach((t, ti) => {
+      if (!t || typeof t.item !== 'string') throw new Error(`headers 第 ${ti} 项缺少 item`);
+      // 空 link 是「更多」纯下拉容器的现状形状（见 src/yml.ts buildNavYml 注释），原样保留
+      navs.push({ id: ti + 1, item: t.item, icon: t.icon ?? '', link: t.link ?? '', parent_id: null, sort: ti });
+    });
+    let next = doc.length + 1; // 子项从顶层之后接号；两趟循环保证全部父先于子入集
+    doc.forEach((t, ti) => {
+      (t.list ?? []).forEach((k, ki) => {
+        if (!k || typeof k.name !== 'string') throw new Error(`headers「${t.item}」第 ${ki} 个子项缺少 name`);
+        navs.push({ id: next++, item: k.name, icon: '', link: k.url ?? '', parent_id: ti + 1, sort: ki });
+      });
+    });
+  }
+  return { flinks, navs };
+}
+
 /** 生成完整 seed.sql 文本（每条语句严格单行——miniflare db.exec 按换行切分） */
-export function generateSeedSql(ymlText) {
+export function generateSeedSql(ymlText, friendlinksText = '', headersText = '') {
   const { sites, cats } = flattenWebstack(ymlText);
-  const lines = ['DELETE FROM sites; DELETE FROM categories;'];
+  const { flinks, navs } = flattenCollections(friendlinksText, headersText);
+  const lines = ['DELETE FROM sites; DELETE FROM categories; DELETE FROM friendlinks; DELETE FROM navitems;'];
   lines.push(
     `INSERT INTO categories (taxonomy, term, icon, sort) VALUES ${cats
       .map((c) => `(${sqlQuote(c.taxonomy)}, ${sqlQuote(c.term)}, ${sqlQuote(c.icon)}, ${c.sort})`)
@@ -76,14 +113,28 @@ export function generateSeedSql(ymlText) {
     );
   }
   flush();
+  if (flinks.length)
+    lines.push(`INSERT INTO friendlinks (id, title, url, description, sort) VALUES ${flinks.map((r, i) => `(${i + 1}, ${sqlQuote(r.title)}, ${sqlQuote(r.url)}, ${sqlQuote(r.description)}, ${i})`).join(', ')};`);
+  // navitems：顶层 id 1..n，子项从 n+1 起；两语句（先父后子）保证外键语义（无 FK 约束，仅顺序习惯）
+  const navCols = '(id, item, icon, link, parent_id, sort)';
+  const navVal = (r) => `(${r.id}, ${sqlQuote(r.item)}, ${sqlQuote(r.icon)}, ${sqlQuote(r.link)}, ${r.parent_id === null ? 'NULL' : r.parent_id}, ${r.sort})`;
+  const navTops = navs.filter((r) => r.parent_id === null);
+  const navKids = navs.filter((r) => r.parent_id !== null);
+  if (navTops.length) lines.push(`INSERT INTO navitems ${navCols} VALUES ${navTops.map(navVal).join(', ')};`);
+  if (navKids.length) lines.push(`INSERT INTO navitems ${navCols} VALUES ${navKids.map(navVal).join(', ')};`);
   return lines.join('\n') + '\n';
 }
 
-// 作为主程序运行（npm run seed）：读真实 yml，写 admin/seed.sql
+// 作为主程序运行（npm run seed）：读仓库根 data/ 三个真实 yml，写 admin/seed.sql
 if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])) {
   const yml = readFileSync(new URL('../../data/webstack.yml', import.meta.url), 'utf8');
-  const out = generateSeedSql(yml);
+  const fl = readFileSync(new URL('../../data/friendlinks.yml', import.meta.url), 'utf8');
+  const headers = readFileSync(new URL('../../data/headers.yml', import.meta.url), 'utf8');
+  const out = generateSeedSql(yml, fl, headers);
   writeFileSync(new URL('../seed.sql', import.meta.url), out);
-  const { sites } = flattenWebstack(yml);
-  console.log(`seed.sql 已生成：${sites.length} 个站点行`);
+  const { sites, cats } = flattenWebstack(yml);
+  const { flinks, navs } = flattenCollections(fl, headers);
+  console.log(
+    `seed.sql 已生成：${sites.length} 站点行 / ${cats.length} 分类行 / ${flinks.length} 友链行 / ${navs.length} 导航行（${navs.filter((r) => r.parent_id === null).length} 顶 + ${navs.length - navs.filter((r) => r.parent_id === null).length} 子）`
+  );
 }
