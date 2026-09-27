@@ -28,6 +28,7 @@
   --warn-soft: rgba(217, 130, 43, 0.12);
   --err: #f1404b;            /* 前台链接 hover 红 */
   --err-soft: rgba(241, 64, 75, 0.10);
+  --err-ink: #ffffff;        /* danger 填充钮前景（T12 carry：替代硬编码 #ffffff，暗色下随板反转） */
   --shadow: 0 2px 10px rgba(0, 36, 100, 0.07);
   --shadow-lg: 0 16px 36px rgba(0, 36, 100, 0.14);
   --radius: 12px;
@@ -52,6 +53,7 @@
     --warn-soft: rgba(217, 160, 83, 0.14);
     --err: #e06c75;
     --err-soft: rgba(224, 108, 117, 0.14);
+    --err-ink: #1c1a1a;      /* 暗色下 --err 填充钮的深字（对齐 --acc-ink 反色范式，保对比度） */
     --shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
     --shadow-lg: 0 16px 36px rgba(0, 0, 0, 0.5);
   }
@@ -153,7 +155,7 @@ input[type="search"], input[type="file"] { min-width: 10rem; }
 /* .danger 描边档（工具栏批删入口）；.primary.danger 填充档（弹窗确认钮），#f1404b 走 --err 令牌 */
 button.danger { color: var(--err); border-color: var(--err); }
 button.danger:hover:not(:disabled) { background: var(--err-soft); border-color: var(--err); }
-button.primary.danger { background: var(--err); border-color: var(--err); color: #ffffff; }
+button.primary.danger { background: var(--err); border-color: var(--err); color: var(--err-ink); }
 button.primary.danger:hover:not(:disabled) { filter: brightness(1.06); border-color: var(--err); }
 
 /* ---------- confirmModal（Task 10）：modalHost 挂 body，遮罩盖全站（combo 60 < 70） ---------- */
@@ -200,6 +202,20 @@ button.primary.danger:hover:not(:disabled) { filter: brightness(1.06); border-co
 #cat-new { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
 #cat-new .combo { flex: 1 1 9rem; min-width: 9rem; }
 #cat-new #cat-new-icon { flex: 0 1 14rem; min-width: 8rem; }
+
+/* ---------- 友链 / 导航视图（Task 12）：同构表 + 工具栏；子项缩进复用 .cat-child ---------- */
+#fr-toolbar, #nv-toolbar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .6rem 0 .2rem; }
+#fr-meta, #nv-meta { font-size: 13px; }
+#fr-table, #nv-table { overflow-x: auto; margin-top: .4rem; }
+#fr-table table { min-width: 42rem; }
+#nv-table table { min-width: 52rem; }
+#fr-table td, #nv-table td { vertical-align: middle; }
+#nv-table tbody tr.nv-head > td { background: var(--acc-soft); } /* 顶层行底色=分组带（呼应 cat-head） */
+#nv-table .nv-icon { width: 10rem; }
+#nv-table select.parent { width: 11rem; min-width: 8rem; }       /* brief Step 3：父项下拉宽度（行内） */
+#nv-new select.parent { width: 11rem; }                          /* 新增表单同款 */
+#fr-new, #nv-new { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+#fr-new input, #nv-new input { flex: 1 1 9rem; min-width: 8rem; }
 
 /* ---------- 列表视图 ---------- */
 #filters { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
@@ -430,4 +446,14 @@ th.chk-col input, td.chk-col input { width: auto; min-width: 0; accent-color: va
   #cat-new { flex-direction: column; align-items: stretch; }
   #cat-new .combo { flex: none; width: 100%; }
   #cat-new-go { min-height: 42px; }
+  /* Task 12：友链/导航表并入全局卡片化规则（同 #cat-table：解除横滚与最小宽度即可），
+     ID 列让位绝对定位勾选框由全局 tbody td.cell-id 规则承担 */
+  #fr-table, #nv-table { overflow-x: visible; }
+  #fr-table table, #nv-table table { min-width: 0; }
+  #fr-toolbar, #nv-toolbar { flex-wrap: wrap; }
+  #fr-del-sel, #fr-reload, #nv-del-sel, #nv-reload { min-height: 42px; }
+  #fr-new, #nv-new { flex-direction: column; align-items: stretch; }
+  #fr-new input, #nv-new input { width: 100%; }
+  #nv-table select.parent, #nv-new select.parent { width: 100%; }
+  #fr-new-go, #nv-new-go { min-height: 42px; }
 }

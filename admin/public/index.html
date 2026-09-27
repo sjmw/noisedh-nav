@@ -22,6 +22,8 @@
   <nav id="tabs" class="hidden" aria-label="视图切换">
     <button type="button" data-view="list">列表</button>
     <button type="button" data-view="categories">分类</button>
+    <button type="button" data-view="friends">友链</button>
+    <button type="button" data-view="navs">导航</button>
     <button type="button" data-view="import">导入</button>
     <button type="button" data-view="add">新增</button>
   </nav>
@@ -65,12 +67,49 @@
     <div id="cat-table"></div>
     <h2>新建分类</h2>
     <p class="dim">分类名必填；子分类仅在嵌套分类下可填（平铺分类填了会被后端拒绝）。icon 留空则后端自动配置
-      （唯一回显路径 = 添加成功后 201 响应，前端零规则；点 ▾ 可从现有 icon 集中挑选）。</p>
+      （自动配的 icon 在添加成功的提示里呈现，不回填表单——避免被下一笔新增静默带走；点 ▾ 可从现有 icon 集中挑选）。</p>
     <div id="cat-new">
       <span class="combo"><input id="cat-new-tax" type="text" placeholder="分类名（必填）" autocomplete="off"><button type="button" class="combo-btn" data-combo-for="cat-new-tax" aria-label="选择分类">▾</button></span>
       <span class="combo"><input id="cat-new-term" type="text" placeholder="子分类（可选）" autocomplete="off"><button type="button" class="combo-btn" data-combo-for="cat-new-term" aria-label="选择子分类">▾</button></span>
       <span class="combo"><input id="cat-new-icon" type="text" placeholder="icon（留空=自动配置）" autocomplete="off"><button type="button" class="combo-btn" data-combo-for="cat-new-icon" aria-label="选择现有 icon">▾</button></span>
       <button id="cat-new-go" class="primary" type="button">添加</button>
+    </div>
+  </section>
+
+  <section id="view-friends" class="hidden">
+    <div id="fr-toolbar">
+      <button id="fr-del-sel" type="button" class="danger" disabled>删除选中 (0)</button>
+      <button id="fr-reload" type="button" title="重新加载友链表">刷新</button>
+      <span id="fr-meta" class="dim"></span>
+    </div>
+    <div id="fr-table"></div>
+    <h2>新增友链</h2>
+    <p class="dim">标题/URL 必填；URL 原样保存（不做规范化，人工维护的字节保真数据）。改动只写 D1，前台生效需再点「批量发布」。</p>
+    <div id="fr-new">
+      <input id="fr-new-title" type="text" placeholder="标题（必填）" autocomplete="off">
+      <input id="fr-new-url" type="text" placeholder="URL（必填，https://… 原样保存）" autocomplete="off">
+      <input id="fr-new-desc" type="text" placeholder="描述（可选）" autocomplete="off">
+      <button id="fr-new-go" class="primary" type="button">添加</button>
+    </div>
+  </section>
+
+  <section id="view-navs" class="hidden">
+    <div id="nv-toolbar">
+      <button id="nv-del-sel" type="button" class="danger" disabled>删除选中 (0)</button>
+      <button id="nv-reload" type="button" title="重新加载导航表">刷新</button>
+      <span id="nv-meta" class="dim"></span>
+    </div>
+    <!-- 分组表：GET 序直出——顶层按 (sort,id)，子项紧随其父；子项名称格缩进（复用 .cat-child） -->
+    <div id="nv-table"></div>
+    <h2>新增导航项</h2>
+    <p class="dim">名称必填；icon/link 可选（link 留空即纯下拉容器）。「父项」下拉只列顶层项（「（无）」= 顶层），仅支持一层下拉。
+      编辑「有子项的顶层」时不会提交父项字段（后端容器闸：不变回显也会 400）。改动只写 D1，前台生效需再点「批量发布」。</p>
+    <div id="nv-new">
+      <input id="nv-new-item" type="text" placeholder="名称（必填）" autocomplete="off">
+      <input id="nv-new-icon" type="text" placeholder="icon（可选，如 fa fa-home）" autocomplete="off">
+      <input id="nv-new-link" type="text" placeholder="link（可选，https://… 或 ./path/）" autocomplete="off">
+      <select id="nv-new-parent" class="parent" aria-label="父项"><option value="">（无）= 顶层</option></select>
+      <button id="nv-new-go" class="primary" type="button">添加</button>
     </div>
   </section>
 

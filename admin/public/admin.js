@@ -4,7 +4,8 @@
  *  - 口令存 sessionStorage（brief 拍板；spec §7 原文写 localStorage，以 brief 为准——关标签页即失效）。
  *  - 任何地方不打印/不落盘 token；401 → 清除口令并重新显示口令条。
  *  - 所有请求走 /api/admin/*，响应壳：单行 {site}、列表 {sites,total,page,perPage}、
- *    导入 {added,skipped_dup,failed,items}、发布 {commitUrl,count,friendlinks,navitems,files}（Task 9 三文件化）、错误 {error,message}。
+ *    导入 {added,skipped_dup,failed,items}、发布 {commitUrl,count,friendlinks,navitems,files}（Task 9 三文件化）、
+ *    友链单行 {friendlink} / 列表 {friendlinks}（Task 4）、导航单行 {navitem} / 列表 {navitems}（Task 5）、错误 {error,message}。
  *  - URL 锚定源根（location.origin + '/api/admin/'）：页面可能挂在 /（本地 dev）或 /admin/
  *    （线上区域路由），路径相对解析在 /admin/ 下会指向 /admin/api/... 而失效；同源绝对路径两处均正确。
  */
@@ -75,6 +76,8 @@ function showView(name) {
   if (name === 'list') { loadList(); loadTaxonomies(); }
   if (name === 'add') loadTaxonomies(); // 保证新增视图的分类建议不依赖「先去列表」顺序
   if (name === 'categories') loadCategories(); // 分类表数据自足（categories+shapes 同响应），不依赖先去列表
+  if (name === 'friends') loadFriends();  // 友链表数据自足（GET friendlinks 全量，无分页）
+  if (name === 'navs') loadNavs();        // 导航表数据自足（GET navitems 已按 顶层-(sort,id)-子项紧随 分组）
 }
 tabs.addEventListener('click', (e) => {
   const v = e.target && e.target.dataset && e.target.dataset.view;
@@ -517,7 +520,8 @@ $('del-wipe').onclick = guarded(() => deleteFlow({ wipe: '全部删除' }, ['将
  *  - 空 taxonomy 后端 400：UI 先行拦截。
  *  - 「（未登记）」灰条 = shapes（categories∪sites union）中存在但 categories 表无行的 pair：
  *    只读、不可勾不可删，「补登记」把 pair 填入新建表单（提交仍走 POST 形态闸）。
- *  - icon 零前端规则（防漂移裁决）：唯一回显路径 = POST 缺 icon → 201 {category.icon}。 */
+ *  - icon 零前端规则（防漂移裁决）：自动 icon 唯一可见路径 = POST 缺 icon → 201 {category.icon} → toast 文案
+ *    （T12 carry 起不再回填输入框，回显不带入下一次新增）。 */
 let catRows = [];                 // GET categories 的 categories（含 siteCount）
 const catSel = new Set();         // 勾选 pair 键；每次整表重载清空（同列表页幽灵选择纪律）
 let catFormTermSync = null;       // 新建表单 term placeholder 联动句柄
@@ -723,7 +727,12 @@ async function saveCat(row, { btn, isHeader, inTax, inTerm, inIcon, inSort }) {
 }
 
 async function delCat(row, isHeader, btn) {
-  const lines = [`${catLabel(row)}：当前直挂 ${row.siteCount} 个站点。`];
+  // Task 12 carry（T11 审查结转④）：删除闸看的是「整类」站点数——顶层行确认行改为本地求和
+  // （header+children 的 siteCount；GET 序保证子行紧随其父，catRows 现值即可算，无需二次请求）。
+  const headTotal = isHeader ? catRows.filter((r) => r.taxonomy === row.taxonomy).reduce((a, r) => a + (r.siteCount || 0), 0) : row.siteCount;
+  const lines = [isHeader
+    ? `${catLabel(row)}：整类（含全部子分类）当前共 ${headTotal} 个站点。`
+    : `${catLabel(row)}：当前直挂 ${row.siteCount} 个站点。`];
   if (isHeader) lines.push('删除闸：整类（含全部子分类）必须零站点；通过后连带删除其全部子分类行（只动分类表，不触碰站点行）。');
   const ok = await confirmModal({ title: '确认删除分类？', lines, danger: true });
   if (!ok) return;
@@ -763,19 +772,21 @@ async function createCat() {
   const icon = $('cat-new-icon').value.trim();
   const payload = { taxonomy: tax };
   if (term) payload.term = term;
-  if (icon) payload.icon = icon; // 缺省走后端 resolveIcon——201 回显是唯一 icon 预览路径（前端零规则）
+  if (icon) payload.icon = icon; // 缺省走后端 resolveIcon；自动结果只进成功 toast（T12 carry：不回填表单，防静默带入下一笔新增）
   const btn = $('cat-new-go'); btn.disabled = true;
   try {
     const { category } = await api('categories', { method: 'POST', body: JSON.stringify(payload) });
     const label = category ? catLabel(category) : `分类「${tax}${term ? '/' + term : ''}」`;
     if (!icon && category) {
-      $('cat-new-icon').value = category.icon; // 201 回显 → 回填 icon 输入框；要改就改行内值再点「保存」（PATCH）
+      // Task 12 carry（T11 审查结转①）：自动配 icon 只进 toast 文案，不再回填输入框——
+      // 回显值若留在表单会被下一次新增静默带走（POST 显式带 icon = 绕过后端 resolveIcon 决策链）。
       toast(`${label} 已添加；已自动配 icon「${category.icon}」`, { type: 'ok', ttl: 6000 });
     } else {
       toast(`${label} 已添加`, { type: 'ok', ttl: 4000 });
     }
     $('cat-new-tax').value = '';
     $('cat-new-term').value = '';
+    $('cat-new-icon').value = ''; // 成功即复位（含手填 icon 的场景），下一笔新增默认回到自动决策链
     await loadCategories(); loadTaxonomies();
   } catch (e) {
     if (e.status !== 401) toast(e.message, { type: 'err', ttl: 10000 }); // 形态相反 400 等：后端 message 原文
@@ -790,6 +801,389 @@ catFormTermSync = bindTermLink($('cat-new-tax'), $('cat-new-term'));
 attachCombo($('cat-new-tax'), document.querySelector('.combo-btn[data-combo-for="cat-new-tax"]'), allTaxonomies);
 attachCombo($('cat-new-term'), document.querySelector('.combo-btn[data-combo-for="cat-new-term"]'), () => termsFor($('cat-new-tax').value));
 attachCombo($('cat-new-icon'), document.querySelector('.combo-btn[data-combo-for="cat-new-icon"]'), catIconOptions);
+
+/* ---------- 友链视图（Task 12：简单表 CRUD + 勾选批删） ----------
+ * 后端契约（Task 4，routes.ts friendlinks 段）与 UI 侧落地方式：
+ *  - GET friendlinks → {friendlinks:[{id,title,url,description,sort,created_at,updated_at}]}（sort,id 序，全量无分页）。
+ *  - POST 需 {title,url} 均非空字符串 → 201 {friendlink}；description 可选；sort 缺省 0（表单不暴露，行内可改）。
+ *  - PATCH 白名单 title/url/description/sort；title/url 传空串会被 400「需为非空字符串」——保存只送差量，
+ *    空标题/URL 在 UI 先行拦截；行不存在 404。
+ *  - DELETE → 204 幂等；POST batch-delete {ids:正整数数组} → {deleted}（无原子闸，友链互相独立）。
+ *  - url 原样存不做规范化（人工维护的字节保真数据，与 sites 的 url_raw||url 口径无关）。
+ *  - 改动只写 D1：前台生效需再点「批量发布」（发布三文件化之 friendlinks.yml，Task 9）。 */
+let flRows = [];                 // GET friendlinks 的全量行
+const flSel = new Set();         // 勾选 id；每次整表重载清空（幽灵选择纪律，同列表页）
+
+async function loadFriends() {
+  flSel.clear();
+  try {
+    const { friendlinks } = await api('friendlinks');
+    flRows = Array.isArray(friendlinks) ? friendlinks : [];
+    renderFriends();
+  } catch (e) { if (e.status !== 401) toast('加载友链失败：' + e.message, { type: 'err' }); }
+  renderFrChecks(); // 成功/失败都同步勾选态与批删钮（失败时旧表仍在屏上，需跟随已清空的 flSel）
+}
+
+function renderFriends() {
+  $('fr-meta').textContent = `共 ${flRows.length} 条友链`;
+  if (!flRows.length) { $('fr-table').replaceChildren(el('div', 'empty', '还没有友链——用下方表单添加')); return; }
+  const table = el('table');
+  const thead = el('thead');
+  const head = el('tr');
+  const chkTh = el('th', 'chk-col');
+  const chkAll = el('input');
+  chkAll.type = 'checkbox'; chkAll.id = 'fr-chk-all'; chkAll.setAttribute('aria-label', '全选友链');
+  chkAll.onchange = () => {
+    for (const r of flRows) { if (chkAll.checked) flSel.add(r.id); else flSel.delete(r.id); }
+    renderFrChecks();
+  };
+  chkTh.append(chkAll);
+  head.append(chkTh);
+  for (const [t, cls] of [['ID', 'col-id'], ['标题', ''], ['URL', ''], ['描述', ''], ['排序', 'col-sort'], ['操作', 'col-ops']]) head.append(el('th', cls, t));
+  thead.append(head);
+  table.append(thead);
+  const tbody = el('tbody');
+  for (const r of flRows) tbody.append(buildFlRow(r));
+  table.append(tbody);
+  $('fr-table').replaceChildren(table);
+}
+
+function buildFlRow(fl) {
+  const tr = document.createElement('tr');
+  tr.dataset.id = String(fl.id);
+  const td = (label, cls, ...nodes) => { const c = el('td', cls); c.dataset.label = label; c.append(...nodes); tr.append(c); return c; };
+  const chk = el('input', 'row-chk');
+  chk.type = 'checkbox'; chk.dataset.id = String(fl.id); chk.checked = flSel.has(fl.id);
+  chk.setAttribute('aria-label', `选择友链 #${fl.id}`);
+  chk.onchange = () => { if (chk.checked) flSel.add(fl.id); else flSel.delete(fl.id); renderFrChecks(); };
+  td('', 'chk-col', chk);
+  td('ID', 'cell-id', el('span', '', fl.id));
+  const inTitle = fieldInput('text', fl.title);
+  const inUrl = fieldInput('text', fl.url, 'https://…');
+  const inDesc = fieldInput('text', fl.description);
+  const inSort = fieldInput('number', fl.sort);
+  td('标题', 'cell-title', inTitle); td('URL', '', inUrl); td('描述', '', inDesc); td('排序', 'col-sort', inSort);
+  const ops = el('div', 'row-ops');
+  ops.append(
+    actionBtn('保存', (btn) => saveFriend(fl, { btn, inTitle, inUrl, inDesc, inSort })),
+    actionBtn('删除', (btn) => delFriend(fl, btn), true),
+  );
+  td('操作', 'col-ops', ops);
+  return tr;
+}
+
+// 行内编辑：只提交差量（PATCH 白名单四键）；标题/URL 清空先行拦截（后端 400 需非空串）。
+async function saveFriend(fl, { btn, inTitle, inUrl, inDesc, inSort }) {
+  const patch = {};
+  const titleV = inTitle.value.trim();
+  if (titleV !== fl.title) {
+    if (!titleV) { toast('标题不能为空（后端会拒绝空标题）', { type: 'err' }); return; }
+    patch.title = titleV;
+  }
+  const urlV = inUrl.value.trim();
+  if (urlV !== fl.url) {
+    if (!urlV) { toast('URL 不能为空（后端会拒绝空 URL）', { type: 'err' }); return; }
+    patch.url = urlV; // 原样送：后端不规范化（字节保真）
+  }
+  if (inDesc.value !== fl.description) patch.description = inDesc.value; // 描述允许空串
+  const sortN = Number(inSort.value);
+  if (Number.isFinite(sortN) && sortN !== fl.sort) patch.sort = sortN;
+  if (!Object.keys(patch).length) { toast('没有改动可保存', { ttl: 3000 }); return; }
+  btn.disabled = true;
+  try {
+    const { friendlink: fresh } = await api(`friendlinks/${fl.id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+    const i = flRows.findIndex((r) => r.id === fl.id);
+    if (i >= 0) flRows[i] = fresh;
+    document.querySelector(`#fr-table tr[data-id="${fl.id}"]`)?.replaceWith(buildFlRow(fresh));
+    toast(`友链 #${fresh.id} 已保存`, { type: 'ok', ttl: 3000 });
+  } catch (e) {
+    if (e.status !== 401) toast('保存失败：' + e.message, { type: 'err', ttl: 8000 }); // 404（行已被他端删除）等原文呈现
+    btn.disabled = false;
+  }
+}
+
+// 单行删除走原生 confirm（brief 口径：多行 confirmModal、单行 confirm）；失败（如 404 竞态）toast。
+async function delFriend(fl, btn) {
+  if (!confirm(`确认删除友链 #${fl.id}（${fl.title}）？`)) return;
+  btn.disabled = true;
+  try {
+    await api(`friendlinks/${fl.id}`, { method: 'DELETE' });
+  } catch (e) {
+    if (e.status !== 401) toast('删除失败：' + e.message, { type: 'err', ttl: 8000 });
+    btn.disabled = false;
+    return;
+  }
+  const i = flRows.findIndex((r) => r.id === fl.id);
+  if (i >= 0) flRows.splice(i, 1);
+  flSel.delete(fl.id);
+  document.querySelector(`#fr-table tr[data-id="${fl.id}"]`)?.remove();
+  toast(`友链 #${fl.id} 已删除（前台生效需再点批量发布）`, { type: 'ok', ttl: 4000 });
+  renderFrChecks();
+}
+
+function renderFrChecks() {
+  for (const cb of $('fr-table').querySelectorAll('input.row-chk')) cb.checked = flSel.has(Number(cb.dataset.id));
+  const chkAll = $('fr-chk-all');
+  if (chkAll) {
+    const ids = flRows.map((r) => r.id);
+    chkAll.checked = ids.length > 0 && ids.every((id) => flSel.has(id));
+    chkAll.indeterminate = !chkAll.checked && ids.some((id) => flSel.has(id));
+  }
+  const b = $('fr-del-sel');
+  b.textContent = `删除选中 (${flSel.size})`;
+  b.disabled = flSel.size === 0;
+}
+
+async function frBatchDelete() {
+  const rows = flRows.filter((r) => flSel.has(r.id));
+  if (!rows.length) return;
+  const names = rows.slice(0, 8).map((r) => r.title).join('、') + (rows.length > 8 ? `…等 ${rows.length} 条` : '');
+  const ok = await confirmModal({ title: '确认批量删除友链？', lines: [`已选 ${rows.length} 条：${names}`, '前台生效需再点批量发布。'], danger: true });
+  if (!ok) return;
+  const r = await api('friendlinks/batch-delete', { method: 'POST', body: JSON.stringify({ ids: rows.map((x) => x.id) }) });
+  toast(`已删除 ${r.deleted} 条友链（前台生效需再点批量发布）`, { type: 'ok', ttl: 5000 });
+  await loadFriends();
+}
+// 后端 400（ids 形状拒等）经 guarded 统一 err toast——与 sites/categories 删除族同一错误呈现纪律
+$('fr-del-sel').onclick = guarded(frBatchDelete);
+
+async function createFriend() {
+  const title = $('fr-new-title').value.trim();
+  const url = $('fr-new-url').value.trim();
+  if (!title || !url) { toast('标题和 URL 均必填（空值会被后端拒绝）', { type: 'err' }); return; }
+  const payload = { title, url };
+  const desc = $('fr-new-desc').value.trim();
+  if (desc) payload.description = desc;
+  const btn = $('fr-new-go'); btn.disabled = true;
+  try {
+    const { friendlink } = await api('friendlinks', { method: 'POST', body: JSON.stringify(payload) });
+    $('fr-new-title').value = '';
+    $('fr-new-url').value = '';
+    $('fr-new-desc').value = '';
+    toast(`友链「${friendlink.title}」已添加（前台生效需再点批量发布）`, { type: 'ok', ttl: 4000 });
+    await loadFriends();
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, { type: 'err', ttl: 8000 });
+  } finally {
+    btn.disabled = false;
+  }
+}
+$('fr-new-go').addEventListener('click', createFriend);
+$('fr-reload').addEventListener('click', () => loadFriends());
+
+/* ---------- 导航视图（Task 12：一层父子 CRUD + 原子批删） ----------
+ * 后端契约（Task 5，routes.ts navitems 段）与 UI 侧落地方式：
+ *  - GET navitems → {navitems}：顶层按 (sort,id)、子项紧随其父且组内 (sort,id)；孤儿子项殿后（不静默丢行）。
+ *    渲染直接按返回序走，不再前端排序；顶层行加 .nv-head 底色分组，子项名称格复用 .cat-child 缩进。
+ *  - POST 需 item 非空；parent_id 仅可为顶层项 id 或 null/缺省（子项之下挂子项 400「仅支持一层下拉」）→ 201 {navitem}。
+ *  - PATCH 白名单 item/icon/link/parent_id/sort；icon/link 允许空串（纯下拉容器）。
+ *    容器闸（裁决2 三形态）：顶层「有子」行收到 parent_id:null（哪怕是不变回显）→ 400「请删除子项后再升顶」；
+ *    UI 纪律：parent_id 只在相对现值真的变化时才进 payload——编辑有子顶层的其它字段绝不夹带 parent_id 键。
+ *    降挂闸：有子顶层不能降为子项（三层）——本行父下拉直接禁用；子项升顶（parent_id:null）与换父
+ *    （含挂到「已有子的顶层」，目标侧裁决1 已放行）正常提供。
+ *  - DELETE 单行：有子顶层 400（message 含子项数与引导文案）→ toast 原文；不存在幂等 204。
+ *  - POST batch-delete {ids}：原子——勾了顶层必须连同其全部子项，否则 400 列阻塞清单、整体拒绝零删除。
+ *  - 改动只写 D1：前台生效需再点「批量发布」（发布三文件化之 headers.yml，Task 9）。 */
+let nvRows = [];                 // GET navitems 的分组序全量行
+const nvSel = new Set();         // 勾选 id；每次整表重载清空
+const nvTops = () => nvRows.filter((r) => r.parent_id === null);
+const nvOptLabel = (t) => `${t.item}（#${t.id}）`;
+
+async function loadNavs() {
+  nvSel.clear();
+  try {
+    const { navitems } = await api('navitems');
+    nvRows = Array.isArray(navitems) ? navitems : [];
+    renderNavs();
+  } catch (e) { if (e.status !== 401) toast('加载导航失败：' + e.message, { type: 'err' }); }
+  renderNvChecks();
+}
+
+// 「父项」下拉只列顶层（brief 原样）；行内编辑与新增表单共用同一选项构造。
+function fillParentOptions(select, { current, excludeId }) {
+  const cur = current === undefined || current === null ? '' : String(current);
+  select.replaceChildren(new Option('（无）= 顶层', ''));
+  for (const t of nvTops()) {
+    if (t.id === excludeId) continue; // 不能挂向自身（后端同闸 400，UI 直接不列）
+    select.append(new Option(nvOptLabel(t), String(t.id)));
+  }
+  if (cur !== '' && ![...select.options].some((o) => o.value === cur)) {
+    select.append(new Option(`（父 #${cur} 缺失）`, cur)); // 孤儿子项兜底：原父值可见可选，不被静默改成顶层
+  }
+  select.value = cur;
+}
+
+function renderNavs() {
+  $('nv-meta').textContent = `共 ${nvRows.length} 项 · 顶层 ${nvTops().length}（前台生效需再点批量发布）`;
+  refillNvNewParent();
+  if (!nvRows.length) { $('nv-table').replaceChildren(el('div', 'empty', '还没有导航项——用下方表单新建')); return; }
+  const kids = new Map();
+  for (const r of nvRows) if (r.parent_id !== null) kids.set(r.parent_id, (kids.get(r.parent_id) ?? 0) + 1);
+  const table = el('table');
+  const thead = el('thead');
+  const head = el('tr');
+  const chkTh = el('th', 'chk-col');
+  const chkAll = el('input');
+  chkAll.type = 'checkbox'; chkAll.id = 'nv-chk-all'; chkAll.setAttribute('aria-label', '全选导航项');
+  chkAll.onchange = () => {
+    for (const r of nvRows) { if (chkAll.checked) nvSel.add(r.id); else nvSel.delete(r.id); }
+    renderNvChecks();
+  };
+  chkTh.append(chkAll);
+  head.append(chkTh);
+  for (const [t, cls] of [['ID', 'col-id'], ['名称', ''], ['icon', 'nv-icon'], ['link', ''], ['父项', ''], ['排序', 'col-sort'], ['操作', 'col-ops']]) head.append(el('th', cls, t));
+  thead.append(head);
+  table.append(thead);
+  const tbody = el('tbody');
+  for (const r of nvRows) tbody.append(buildNavRow(r, kids.get(r.id) ?? 0));
+  table.append(tbody);
+  $('nv-table').replaceChildren(table);
+}
+
+function buildNavRow(row, kidCount) {
+  const isTop = row.parent_id === null;
+  const tr = document.createElement('tr');
+  tr.dataset.id = String(row.id);
+  if (isTop) tr.classList.add('nv-head'); // 顶层行底色分组（style.css）
+  const td = (label, cls, ...nodes) => { const c = el('td', cls); c.dataset.label = label; c.append(...nodes); tr.append(c); return c; };
+  const chk = el('input', 'row-chk');
+  chk.type = 'checkbox'; chk.dataset.id = String(row.id); chk.checked = nvSel.has(row.id);
+  chk.setAttribute('aria-label', `选择导航项 #${row.id}`);
+  chk.onchange = () => { if (chk.checked) nvSel.add(row.id); else nvSel.delete(row.id); renderNvChecks(); };
+  td('', 'chk-col', chk);
+  td('ID', 'cell-id', el('span', '', row.id));
+  const inItem = fieldInput('text', row.item);
+  td('名称', isTop ? '' : 'cat-child', inItem); // 子项缩进复用 T11 的 .cat-child
+  const inIcon = fieldInput('text', row.icon, 'fa fa-home 等');
+  const inLink = fieldInput('text', row.link, 'https://… 或 ./path/');
+  td('icon', 'nv-icon', inIcon); td('link', '', inLink);
+  const selParent = el('select', 'parent');
+  selParent.setAttribute('aria-label', `导航项 #${row.id} 的父项`);
+  fillParentOptions(selParent, { current: row.parent_id, excludeId: row.id });
+  if (isTop && kidCount > 0) {
+    // 降挂闸 UI 化：有子顶层改挂任何父都必 400（三层），直接禁用；其值保持「（无）」，保存时 parent_id 键被省略。
+    selParent.disabled = true;
+    selParent.title = '该顶层项有子项：不能作为子项挂载（会超过一层）';
+  }
+  td('父项', '', selParent);
+  const inSort = fieldInput('number', row.sort);
+  td('排序', 'col-sort', inSort);
+  const ops = el('div', 'row-ops');
+  ops.append(
+    actionBtn('保存', (btn) => saveNavitem(row, { btn, inItem, inIcon, inLink, selParent, inSort })),
+    actionBtn('删除', (btn) => delNavitem(row, btn), true),
+  );
+  td('操作', 'col-ops', ops);
+  return tr;
+}
+
+async function saveNavitem(row, { btn, inItem, inIcon, inLink, selParent, inSort }) {
+  const patch = {};
+  const itemV = inItem.value.trim();
+  if (itemV !== row.item) {
+    if (!itemV) { toast('名称不能为空（后端会拒绝）', { type: 'err' }); return; }
+    patch.item = itemV;
+  }
+  const iconV = inIcon.value.trim();
+  if (iconV !== row.icon) patch.icon = iconV; // icon/link 允许空串（纯下拉容器语义）
+  const linkV = inLink.value.trim();
+  if (linkV !== row.link) patch.link = linkV;
+  // 容器闸规避核心纪律：parent_id 仅在相对现值变化时才进 payload。
+  // 编辑「有子顶层」其它字段时本值不变（（无）↔null）→ 键完全不出现 → 不触发 400「请删除子项后再升顶」。
+  const pidV = selParent.value === '' ? null : Number(selParent.value);
+  if (pidV !== row.parent_id) patch.parent_id = pidV;
+  const sortN = Number(inSort.value);
+  if (Number.isFinite(sortN) && sortN !== row.sort) patch.sort = sortN;
+  if (!Object.keys(patch).length) { toast('没有改动可保存', { ttl: 3000 }); return; }
+  btn.disabled = true;
+  try {
+    const { navitem: fresh } = await api(`navitems/${row.id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+    // 改名/换父/排序都可能影响分组序与父下拉选项：整表重载，屏上必反映真实态（同分类页纪律）
+    toast(`导航项 #${fresh.id} 已保存`, { type: 'ok', ttl: 3000 });
+    await loadNavs();
+  } catch (e) {
+    if (e.status !== 401) toast('保存失败：' + e.message, { type: 'err', ttl: 8000 }); // 降挂/子挂子等 400 原文呈现
+    btn.disabled = false;
+  }
+}
+
+async function delNavitem(row, btn) {
+  if (!confirm(`确认删除导航项 #${row.id}（${row.item}）？`)) return;
+  btn.disabled = true;
+  try {
+    await api(`navitems/${row.id}`, { method: 'DELETE' });
+  } catch (e) {
+    // 有子顶层 400：后端 message 含子项数与「先删子项或 batch-delete 连选」引导，原文 toast
+    if (e.status !== 401) toast(e.message, { type: 'err', ttl: 10000 });
+    btn.disabled = false;
+    return;
+  }
+  toast(`导航项 #${row.id} 已删除（前台生效需再点批量发布）`, { type: 'ok', ttl: 4000 });
+  await loadNavs();
+}
+
+function renderNvChecks() {
+  for (const cb of $('nv-table').querySelectorAll('input.row-chk')) cb.checked = nvSel.has(Number(cb.dataset.id));
+  const chkAll = $('nv-chk-all');
+  if (chkAll) {
+    const ids = nvRows.map((r) => r.id);
+    chkAll.checked = ids.length > 0 && ids.every((id) => nvSel.has(id));
+    chkAll.indeterminate = !chkAll.checked && ids.some((id) => nvSel.has(id));
+  }
+  const b = $('nv-del-sel');
+  b.textContent = `删除选中 (${nvSel.size})`;
+  b.disabled = nvSel.size === 0;
+}
+
+async function nvBatchDelete() {
+  const rows = nvRows.filter((r) => nvSel.has(r.id));
+  if (!rows.length) return;
+  const names = rows.slice(0, 8).map((r) => `${r.item}（#${r.id}）`).join('、') + (rows.length > 8 ? `…等 ${rows.length} 项` : '');
+  const ok = await confirmModal({
+    title: '确认批量删除导航项？',
+    lines: [`已选 ${rows.length} 项：${names}`, '原子删除：勾了顶层项必须连同其全部子项一并勾选，否则后端 400 列阻塞清单，整体拒绝零删除。', '前台生效需再点批量发布。'],
+    danger: true,
+  });
+  if (!ok) return;
+  const r = await api('navitems/batch-delete', { method: 'POST', body: JSON.stringify({ ids: rows.map((x) => x.id) }) });
+  toast(`已删除 ${r.deleted} 个导航项（前台生效需再点批量发布）`, { type: 'ok', ttl: 5000 });
+  await loadNavs();
+}
+$('nv-del-sel').onclick = guarded(nvBatchDelete);
+
+// 新增表单的父下拉：只列顶层；重载后保留仍有效的现选项（新出现的顶层也会即时可选）。
+function refillNvNewParent() {
+  const sel = $('nv-new-parent');
+  fillParentOptions(sel, { current: sel.value === '' ? null : Number(sel.value), excludeId: null });
+}
+
+async function createNavitem() {
+  const item = $('nv-new-item').value.trim();
+  if (!item) { toast('请输入导航项名称（空名称会被后端拒绝）', { type: 'err' }); return; }
+  const payload = { item };
+  const icon = $('nv-new-icon').value.trim();
+  if (icon) payload.icon = icon;
+  const link = $('nv-new-link').value.trim();
+  if (link) payload.link = link;
+  const pv = $('nv-new-parent').value;
+  if (pv !== '') payload.parent_id = Number(pv); // 缺省即顶层（后端 null）；子挂子 400 由后端闸拒、toast 原文
+  const btn = $('nv-new-go'); btn.disabled = true;
+  try {
+    const { navitem } = await api('navitems', { method: 'POST', body: JSON.stringify(payload) });
+    $('nv-new-item').value = '';
+    $('nv-new-icon').value = '';
+    $('nv-new-link').value = '';
+    $('nv-new-parent').value = '';
+    toast(`导航项「${navitem.item}」已添加（前台生效需再点批量发布）`, { type: 'ok', ttl: 4000 });
+    await loadNavs();
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, { type: 'err', ttl: 8000 });
+  } finally {
+    btn.disabled = false;
+  }
+}
+$('nv-new-go').addEventListener('click', createNavitem);
+$('nv-reload').addEventListener('click', () => loadNavs());
 
 /* ---------- 批量发布 ---------- */
 $('publish-btn').addEventListener('click', async (btn) => {
