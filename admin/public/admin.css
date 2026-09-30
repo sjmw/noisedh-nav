@@ -6,7 +6,8 @@
  *   暗色 = custom-style.css body.io-black-mode 的 --ndh-* 暗色板（#18191c/#2c2e2f/#c6c9cf/#8fb8ff）。
  * 前台暗色由 body.io-black-mode 类驱动，后台无主题开关，改为跟随 prefers-color-scheme。
  * 结构：桌面=卡片分区+表格；≤760px=表格行转卡片（td[data-label] 由 admin.js buildRow 写入）。
- * 本文件按「源根锚定」引用（/style.css），与 /admin.js 同机制，挂在 / 或 /admin/ 均同源。
+ * 本文件按「源根锚定」引用（/admin.css），与 /admin.js 同机制，挂在 / 或 /admin/ 均同源。
+ * 文件名必须 admin 前缀——区域路由只有 admin*/api/*/data*，/style.css 会落 Pages 站 404（2026-09-30 修复）。
  * ==========================================================================*/
 
 :root {

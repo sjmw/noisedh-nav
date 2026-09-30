@@ -4,10 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>导航站后台</title>
-<!-- 样式外置 style.css（2026-09-27 美化轮，覆盖原 spec §7「不追求样式」口径）：
+<!-- 样式外置 admin.css（2026-09-27 美化轮，覆盖原 spec §7「不追求样式」口径）：
      与前台主题 noisedh-nav-v2 成套——亮色默认、暗色跟随 prefers-color-scheme，≤760px 表格转卡片。
-     按「源根锚定」引用（/style.css），与 /admin.js 同机制，挂在 / 或 /admin/ 均同源直出。 -->
-<link rel="stylesheet" href="/style.css">
+     文件名必须走 admin 前缀：区域路由只有 admin*/api/*/data* 三条，/style.css 不命中会落到
+     Pages 前台站 404（2026-09-30 线上实锤）。按「源根锚定」引用（/admin.css），与 /admin.js
+     同机制，挂在 / 或 /admin/ 均同源直出。 -->
+<link rel="stylesheet" href="/admin.css">
 </head>
 <body>
 <header>

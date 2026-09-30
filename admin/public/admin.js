@@ -292,7 +292,7 @@ function renderList() {
     return;
   }
   const table = el('table');
-  // 美化轮：显式 thead/tbody —— DOM API 构建不会自动包 tbody，而 style.css 的
+  // 美化轮：显式 thead/tbody —— DOM API 构建不会自动包 tbody，而 admin.css 的
   // 行悬停与移动端卡片规则都以 thead/tbody 为选择器锚点。
   const thead = el('thead');
   const head = el('tr');
@@ -317,7 +317,7 @@ function renderList() {
 }
 
 function actionBtn(label, fn, danger) {
-  const b = el('button', danger ? 'btn-danger' : '', label); // 美化轮：危险色走类（style.css），不再内联
+  const b = el('button', danger ? 'btn-danger' : '', label); // 美化轮：危险色走类（admin.css），不再内联
   b.type = 'button';
   b.addEventListener('click', () => fn(b));
   return b;
@@ -594,7 +594,7 @@ function renderCategories() {
   thead.append(head);
   table.append(thead);
   for (const [tax, g] of gs) {
-    const tbody = el('tbody'); // 一组一 tbody：顶层行粗上边线做分组间隔（style.css）
+    const tbody = el('tbody'); // 一组一 tbody：顶层行粗上边线做分组间隔（admin.css）
     if (g.header) tbody.append(buildCatRow(g.header, true));
     for (const r of [...g.children].sort((a, b) => (a.sort - b.sort) || a.term.localeCompare(b.term))) tbody.append(buildCatRow(r, false));
     for (const t of [...g.unnamed].sort((a, b) => a.localeCompare(b))) tbody.append(buildCatUnnamed(tax, t));
@@ -1058,7 +1058,7 @@ function buildNavRow(row, kidCount) {
   const isTop = row.parent_id === null;
   const tr = document.createElement('tr');
   tr.dataset.id = String(row.id);
-  if (isTop) tr.classList.add('nv-head'); // 顶层行底色分组（style.css）
+  if (isTop) tr.classList.add('nv-head'); // 顶层行底色分组（admin.css）
   const td = (label, cls, ...nodes) => { const c = el('td', cls); c.dataset.label = label; c.append(...nodes); tr.append(c); return c; };
   const chk = el('input', 'row-chk');
   chk.type = 'checkbox'; chk.dataset.id = String(row.id); chk.checked = nvSel.has(row.id);
