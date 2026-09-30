@@ -1,52 +1,44 @@
 - item: 首页
   icon: fa fa-home
-  link: "./"
-
+  link: ./
 - item: 关于本站
   icon: fa fa-info-circle
-  link: "./about/"
-
+  link: ./about/
 - item: 投稿
   icon: fa fa-paper-plane
-  link: "./tougao/"
-  
+  link: ./tougao/
 - item: 更新记录
   icon: fa fa-pencil-square-o
-  link: "./update/"   
-  
+  link: ./update/
 - item: 开源仓库
   icon: fa fa-github
-  link: "https://github.com/rcy1314/noisedh-nav"
-  
+  link: https://github.com/rcy1314/noisedh-nav
 - item: MCP/Skill
   icon: fa fa-coffee
-  link: "./mcp/"
-  
+  link: ./mcp/
 - item: 订阅收录更新
   icon: fa fa-rss-square
-  link: "https://www.noisedh.cn/rss.xml"
-
+  link: https://www.noisedh.cn/rss.xml
 - item: 失效链接记录
   icon: fa fa-calendar-times-o
-  link: "./invalidlinks/"
-
+  link: ./invalidlinks/
 - item: 更多
   icon: fa fa-map-signs
   link: ""
   list:
     - name: 😀Emoji
-      url: "./assets/emoji/"
+      url: ./assets/emoji/
     - name: 🗳TG
-      url: "https://t.me/quanshoulu"
+      url: https://t.me/quanshoulu
     - name: 🎁备用1
-      url: "https://noisedaohang.netlify.app"
+      url: https://noisedaohang.netlify.app
     - name: 🎁备用2
-      url: "https://daohang-c5k.pages.dev"
+      url: https://daohang-c5k.pages.dev
     - name: 🎁备用3
-      url: "https://noisedh.maozi.io"
+      url: https://noisedh.maozi.io
     - name: 🎁备用4
-      url: "https://noisedh.vercel.app"
+      url: https://noisedh.vercel.app
     - name: 🎁备用5
-      url: "https://noisedh.link"
+      url: https://noisedh.link
     - name: 📑旧版
-      url: "./jiuban/"
+      url: ./jiuban/
