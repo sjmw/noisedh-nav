@@ -1,8 +1,9 @@
-# noisedh-admin 部署手册（Task 12 runbook）
+# noisedh-admin 部署手册
 
-Cloudflare Worker + D1 后台（导入/编辑/发布 + 扩展兼容层）。以下命令全部在 `admin/` 目录执行；
+Cloudflare Worker + D1 后台（导入/编辑/发布 + 扩展兼容层 + 管理扩展：友链/顶部导航/分类管理、删除族、三文件发布）。
+以下命令全部在 `admin/` 目录执行；
 `wrangler` 已作为 devDependency 安装，`npx wrangler …` 与 `./node_modules/wrangler/bin/wrangler.js …` 等价。
-本地门禁：`npm test`（126 用例）+ `npm run typecheck`；`npm run dev` 起本地冒烟（见下「本地冒烟」）。
+本地门禁：`npm test`（229 用例）+ `npm run typecheck`；`npm run dev` 起本地冒烟（见下「本地冒烟」）。
 
 ## 前置安装（一次性）
 
@@ -30,9 +31,14 @@ npx wrangler d1 create navdata
 ## 步骤 3 · 远程建表 + secrets
 
 ```bash
-# 建表（schema.sql 幂等：全部 CREATE TABLE IF NOT EXISTS）
+# 建表（schema.sql 幂等：全部 CREATE TABLE / CREATE INDEX IF NOT EXISTS，可对新库旧库反复重放）
 npx wrangler d1 execute navdata --remote --file=./schema.sql --yes
 ```
+
+> **管理扩展迁移前置（spec §9，远程命令需用户亲自放行）**：新 Worker 代码读写
+> `friendlinks`/`navitems`/`settings` 三张新表，**必须先跑上面这条 schema.sql 建表、再 `wrangler deploy`**，
+> 否则新代码上线后一切表操作即 500。已在位的旧库直接重放即可：站点/分类既有数据不丢，
+> 建表语句全部 IF NOT EXISTS 静默跳过。
 
 `--file=./xxx.sql` 为 wrangler 4.141 已验证的命令形态（同命令去掉 --remote 加 `--local` 可在本机跑通，
 本项目测试链路即用它初始化本地 D1）。`--yes` 跳过远程写入的交互确认，非交互 shell 下必带。
@@ -78,11 +84,13 @@ dashboard：Workers & Pages → noisedh-admin → Settings → Routes，添加�
 npx wrangler d1 execute navdata --remote --file=./seed.sql --yes
 ```
 
-`seed.sql` 由 `npm run seed` 从 `data/webstack.yml` 生成（round-trip 零漂移闸口由测试保证）。
+`seed.sql` 由 `npm run seed` 从 `data/webstack.yml` 等生成（round-trip 零漂移闸口由测试保证）。
+基线行数：sites 381 / categories 14 / friendlinks 8 / navitems 17（`test/seed.test.mjs` 断言）。
 
-> ⚠️ **全量替换警告**：`seed.sql` 开头是 `DELETE FROM sites; DELETE FROM categories;`，而 `--yes` 会跳过
-> wrangler 的交互确认——执行 `--remote` 这条命令会**替换线上全部行**，冒烟期间收集到的 pending/编辑中
-> 条目会一并丢失。跑之前先备份：
+> ⚠️ **全量替换警告**：`seed.sql` 开头是
+> `DELETE FROM sites; DELETE FROM categories; DELETE FROM friendlinks; DELETE FROM navitems;`（四数据表全量替换，
+> `settings` 表不受影响），而 `--yes` 会跳过 wrangler 的交互确认——执行 `--remote` 这条命令会**替换线上全部行**，
+> 冒烟期间收集到的 pending/编辑中条目、手加友链/导航、自动登记的分类会一并丢失。跑之前先备份：
 > `npx wrangler d1 execute navdata --remote --command "SELECT * FROM sites" --json > backup.json`
 
 ## 步骤 7 · publish 干跑
@@ -99,8 +107,12 @@ curl -sS -X POST https://nav.wzyo.top/api/admin/publish -H "Authorization: Beare
 
 预期：`{"commitUrl":…,"count":381,"friendlinks":n,"navitems":n,"files":[{path,action}×3]}`（381 = seed 站点行数，与 `test/seed.test.mjs` 闸口断言一致；`action`：`put`=本次写入产生 commit / `skip`=远端逐字节已等）。发布现在一次同步**三份数据文件**：
 `data/webstack.yml` + `data/friendlinks.yml` + `data/headers.yml`。**首次干跑可能产生 3~4 个 commit**：
-两份新文件远端不存在时走「新建式 PUT」（各 1 个 commit），webstack 侧或有 7 行引号风格 churn 的一次性噪音（语义 diff 为零）
-——seed 与线上 `webstack.yml` 的 YAML 引法可能有出入，属预期内。干跑后再点一次应三文件全 `skip`（幂等短接，不再产生 commit）。若报 `github_conflict` 说明远端有非本次发布的改动，消息会写明「N 个文件已更新」——停下人工看 diff，修正后重试点发布即可收敛（内容比对幂等）。
+两份新文件远端不存在时走「新建式 PUT」（各 1 个 commit）；即便已存在，首版也会按后台序列化器口径一次性重写
+friendlinks.yml/headers.yml 格式（语义不变，预期内 churn）。webstack 侧或有 7 行引号风格的一次性噪音（语义 diff 为零）
+——seed 与线上 `webstack.yml` 的 YAML 引法可能有出入，属预期内。干跑后再点一次应三文件全 `skip`（幂等短接，不再产生 commit）。
+**翻转时机与冲突收敛**：pending→published 只在三份文件全部处置完成后翻；中途某文件与远端 sha 撞车（他人改过）则
+停在第 i 个文件、剩余文件不动、状态不翻，消息写明「i 个已更新/N−i 个未更新」——人工核对后**直接重试点发布即可收敛**
+（逐文件字节比对，已等的自动 skip）。若持续报 `github_conflict` 说明远端有非本次发布的改动，停下人工看 diff。
 
 ## 步骤 8 · 手机扩展冒烟清单（用户参与）
 
@@ -110,6 +122,20 @@ curl -sS -X POST https://nav.wzyo.top/api/admin/publish -H "Authorization: Beare
 4. GitHub 仓库出现发布 commit → Pages 自动构建 → 前台刷新可见新条目
 
 > 大书签文件导入若出现部分失败：若因超时/限流部分失败，直接再点一次导入即可续传（已加入的会记为 skipped_dup）。
+
+## 管理端点速查（spec §3，全部 `Authorization: Bearer ADMIN_TOKEN`）
+
+| 资源族 | 端点 | 要点 |
+|---|---|---|
+| sites | `GET/POST /api/admin/sites` · `PATCH/DELETE /sites/:id` · `POST /sites/batch-delete` | 列表带 q/status/taxonomy/term 筛选与分页；batch-delete 三形态互斥：`{ids}` ∣ `{filter}`（按筛选全删，须 ≥1 非空条件）∣ `{wipe:"全部删除"}`（清空全库，UI 逐字输入解锁） |
+| categories | `GET/POST /api/admin/categories` · `PATCH/DELETE /categories/:id` · `POST /categories/batch-delete` | POST 新分类 icon 走 AI→规则表→默认 `fas fa-folder-open fa-lg` 决策链；PATCH 改名（`{taxonomy,term,new}`）级联改站点行、撞名 400、非空分类禁单删；`category:null` 表示仅动站点侧字段 |
+| friendlinks | `GET/POST /api/admin/friendlinks` · `PATCH/DELETE /friendlinks/:id` · `POST /friendlinks/batch-delete` | 对应 `data/friendlinks.yml`；URL 原样存不规范化 |
+| navitems | `GET/POST /api/admin/navitems` · `PATCH/DELETE /navitems/:id` · `POST /navitems/batch-delete` | 对应 `data/headers.yml`；**仅一层下拉**：parent 必须是顶层，子挂子/成环/有子项降挂均 400；批删原子——勾顶层必须连同全部子项，否则整体拒绝零删除；GET 序=顶层按 sort,id、子项紧跟其父 |
+| publish | `POST /api/admin/publish` | 三文件同步（见步骤 7）；webstack 快照 0 行整体拒绝（不发任何 GitHub 请求）；骤降闸只约束 webstack |
+| 其余 | `POST /api/admin/import`（书签）· `GET /api/search` · 扩展兼容层 | 扩展层行为与旧 yaml-server 对齐（手机收藏/删除走此层） |
+
+UI 删除族纪律：单行/批删/清空一律 confirmModal（danger 红钮；wipe 需逐字输入「全部删除」解锁）；
+后端 4xx message 原文 toast（分类改名级联、导航原子批删等引导语都来自后端）。
 
 ## 回滚
 

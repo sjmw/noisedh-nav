@@ -383,7 +383,8 @@ function buildRow(site) {
         if (input.value !== (orig ?? '')) patch[k] = input.value;
       }
       if (inStatus.value !== site.status) patch.status = inStatus.value;
-      const sortNum = Number(inSort.value);
+      // 排序留空 = 未改动：Number('')===0 会把清空误提交为 0（Task13 打磨④，四处同此口径）
+      const sortNum = inSort.value.trim() === '' ? NaN : Number(inSort.value);
       if (Number.isFinite(sortNum) && sortNum !== site.sort) patch.sort = sortNum;
       // 裁定(a)：改 URL 时必须在同一个 PATCH 里同时送 url + url_raw（=编辑值）。
       // 导出取 url_raw||url：若只送 url（或漏送 url_raw），webstack.yml 会停在旧 URL（导出陈旧）；
@@ -418,7 +419,13 @@ function buildRow(site) {
       }
     }),
     actionBtn('删除', async (btn) => {
-      if (!confirm(`确认删除站点 #${site.id}（${site.url_raw || site.url}）？`)) return;
+      // 单行删除统一 confirmModal（Task13 打磨⑤：与批删族同一弹窗纪律，零 innerHTML）
+      const ok = await confirmModal({
+        title: '确认删除站点？',
+        lines: [`站点 #${site.id}：${site.url_raw || site.url}`, '该行将从库中删除；前台生效需再点批量发布。'],
+        danger: true,
+      });
+      if (!ok) return;
       btn.disabled = true;
       try {
         await api(`sites/${site.id}`, { method: 'DELETE' });
@@ -660,17 +667,25 @@ function buildCatUnnamed(tax, term) {
   return tr;
 }
 
-function renderCatChecks() {
-  for (const cb of $('cat-table').querySelectorAll('input.row-chk')) cb.checked = catSel.has(cb.dataset.key);
-  const chkAll = $('cat-chk-all');
+// 勾选族公共实现（Task13 打磨①：原 cat/fr/nv 三份 11 行克隆合一，行为逐字不变）。
+// 与 sites 页 renderChecks 不同族：那个额外管「按筛选删除」钮 disabled，不并。
+// rowKeys=当前表全部行键（分类用 catKey 字符串，友链/导航用数字 id）；sel=已选集合；
+// read=从行勾选框 dataset 读回键（cat 挂 key，fr/nv 挂 id）。
+function renderRowChecks(tableId, allId, btnId, sel, rowKeys, read) {
+  for (const cb of $(tableId).querySelectorAll('input.row-chk')) cb.checked = sel.has(read(cb));
+  const chkAll = $(allId);
   if (chkAll) {
-    const keys = catRows.map((r) => catKey(r.taxonomy, r.term));
-    chkAll.checked = keys.length > 0 && keys.every((k) => catSel.has(k));
-    chkAll.indeterminate = !chkAll.checked && keys.some((k) => catSel.has(k));
+    chkAll.checked = rowKeys.length > 0 && rowKeys.every((k) => sel.has(k));
+    chkAll.indeterminate = !chkAll.checked && rowKeys.some((k) => sel.has(k));
   }
-  const b = $('cat-del-sel');
-  b.textContent = `删除选中 (${catSel.size})`;
-  b.disabled = catSel.size === 0;
+  const b = $(btnId);
+  b.textContent = `删除选中 (${sel.size})`;
+  b.disabled = sel.size === 0;
+}
+
+function renderCatChecks() {
+  renderRowChecks('cat-table', 'cat-chk-all', 'cat-del-sel', catSel,
+    catRows.map((r) => catKey(r.taxonomy, r.term)), (cb) => cb.dataset.key);
 }
 
 async function saveCat(row, { btn, isHeader, inTax, inTerm, inIcon, inSort }) {
@@ -692,7 +707,7 @@ async function saveCat(row, { btn, isHeader, inTax, inTerm, inIcon, inSort }) {
   const iconV = inIcon.value.trim();
   if (iconV && iconV !== row.icon) meta.icon = iconV; // 空串后端静默忽略：不送、UI 也不假称已清空
   else if (!iconV && row.icon) toast('icon 不可清空（空值会被后端忽略，保留原值）', { ttl: 4000 });
-  const sortN = Number(inSort.value);
+  const sortN = inSort.value.trim() === '' ? NaN : Number(inSort.value); // 留空=未改（打磨④）
   if (Number.isFinite(sortN) && sortN !== row.sort) meta.sort = sortN;
   if (!Object.keys(ren).length && !Object.keys(meta).length) { toast('没有改动可保存', { ttl: 3000 }); return; }
   if (Object.keys(ren).length) { // 改名先过级联确认（T10 confirmModal，零 innerHTML）
@@ -886,7 +901,7 @@ async function saveFriend(fl, { btn, inTitle, inUrl, inDesc, inSort }) {
     patch.url = urlV; // 原样送：后端不规范化（字节保真）
   }
   if (inDesc.value !== fl.description) patch.description = inDesc.value; // 描述允许空串
-  const sortN = Number(inSort.value);
+  const sortN = inSort.value.trim() === '' ? NaN : Number(inSort.value); // 留空=未改（打磨④）
   if (Number.isFinite(sortN) && sortN !== fl.sort) patch.sort = sortN;
   if (!Object.keys(patch).length) { toast('没有改动可保存', { ttl: 3000 }); return; }
   btn.disabled = true;
@@ -902,9 +917,16 @@ async function saveFriend(fl, { btn, inTitle, inUrl, inDesc, inSort }) {
   }
 }
 
-// 单行删除走原生 confirm（brief 口径：多行 confirmModal、单行 confirm）；失败（如 404 竞态）toast。
+// 单行删除统一 confirmModal（Task13 打磨⑤，与批删族同纪律）。
+// 更新策略注（打磨③）：友链是平表（无分组序），保存/删除就地打补丁（flRows 增删 + 行节点替换）即可保真；
+// 导航因改名/换父会影响分组排序与父下拉选项，保存/删除均整表重拉（见 saveNav/delNavitem）——两种策略各自成立。
 async function delFriend(fl, btn) {
-  if (!confirm(`确认删除友链 #${fl.id}（${fl.title}）？`)) return;
+  const ok = await confirmModal({
+    title: '确认删除友链？',
+    lines: [`友链 #${fl.id}：${fl.title}`, '前台生效需再点批量发布。'],
+    danger: true,
+  });
+  if (!ok) return;
   btn.disabled = true;
   try {
     await api(`friendlinks/${fl.id}`, { method: 'DELETE' });
@@ -922,16 +944,8 @@ async function delFriend(fl, btn) {
 }
 
 function renderFrChecks() {
-  for (const cb of $('fr-table').querySelectorAll('input.row-chk')) cb.checked = flSel.has(Number(cb.dataset.id));
-  const chkAll = $('fr-chk-all');
-  if (chkAll) {
-    const ids = flRows.map((r) => r.id);
-    chkAll.checked = ids.length > 0 && ids.every((id) => flSel.has(id));
-    chkAll.indeterminate = !chkAll.checked && ids.some((id) => flSel.has(id));
-  }
-  const b = $('fr-del-sel');
-  b.textContent = `删除选中 (${flSel.size})`;
-  b.disabled = flSel.size === 0;
+  renderRowChecks('fr-table', 'fr-chk-all', 'fr-del-sel', flSel,
+    flRows.map((r) => r.id), (cb) => Number(cb.dataset.id));
 }
 
 async function frBatchDelete() {
@@ -1092,7 +1106,7 @@ async function saveNavitem(row, { btn, inItem, inIcon, inLink, selParent, inSort
   // 编辑「有子顶层」其它字段时本值不变（（无）↔null）→ 键完全不出现 → 不触发 400「请删除子项后再升顶」。
   const pidV = selParent.value === '' ? null : Number(selParent.value);
   if (pidV !== row.parent_id) patch.parent_id = pidV;
-  const sortN = Number(inSort.value);
+  const sortN = inSort.value.trim() === '' ? NaN : Number(inSort.value); // 留空=未改（打磨④）
   if (Number.isFinite(sortN) && sortN !== row.sort) patch.sort = sortN;
   if (!Object.keys(patch).length) { toast('没有改动可保存', { ttl: 3000 }); return; }
   btn.disabled = true;
@@ -1108,7 +1122,12 @@ async function saveNavitem(row, { btn, inItem, inIcon, inLink, selParent, inSort
 }
 
 async function delNavitem(row, btn) {
-  if (!confirm(`确认删除导航项 #${row.id}（${row.item}）？`)) return;
+  const ok = await confirmModal({
+    title: '确认删除导航项？',
+    lines: [`导航项 #${row.id}：${row.item}`, '有子项的顶层会被后端 400 拒绝——请改用批删并连选其子项。', '前台生效需再点批量发布。'],
+    danger: true,
+  });
+  if (!ok) return;
   btn.disabled = true;
   try {
     await api(`navitems/${row.id}`, { method: 'DELETE' });
@@ -1123,16 +1142,8 @@ async function delNavitem(row, btn) {
 }
 
 function renderNvChecks() {
-  for (const cb of $('nv-table').querySelectorAll('input.row-chk')) cb.checked = nvSel.has(Number(cb.dataset.id));
-  const chkAll = $('nv-chk-all');
-  if (chkAll) {
-    const ids = nvRows.map((r) => r.id);
-    chkAll.checked = ids.length > 0 && ids.every((id) => nvSel.has(id));
-    chkAll.indeterminate = !chkAll.checked && ids.some((id) => nvSel.has(id));
-  }
-  const b = $('nv-del-sel');
-  b.textContent = `删除选中 (${nvSel.size})`;
-  b.disabled = nvSel.size === 0;
+  renderRowChecks('nv-table', 'nv-chk-all', 'nv-del-sel', nvSel,
+    nvRows.map((r) => r.id), (cb) => Number(cb.dataset.id));
 }
 
 async function nvBatchDelete() {

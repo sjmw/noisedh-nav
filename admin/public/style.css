@@ -277,6 +277,7 @@ td input:hover, td select:hover { border-color: var(--line); background: var(--s
 td input:focus, td select:focus { background: var(--surface); border-color: var(--acc); }
 .col-id { width: 3.2rem; color: var(--dim); }
 .col-sort { width: 5.2rem; }
+#cat-table .cat-icon-col { width: 11rem; } /* 分类页 icon 列：容纳 fas fa-folder-open fa-lg 全串（Task13 打磨②：原无规则的空类名） */
 .col-status { width: 7.5rem; }
 .col-ops { min-width: 11rem; }
 .cell-id { color: var(--dim); }

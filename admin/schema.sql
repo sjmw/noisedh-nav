@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS sites (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX idx_sites_status ON sites(status, taxonomy, term, sort);
+CREATE INDEX IF NOT EXISTS idx_sites_status ON sites(status, taxonomy, term, sort);
 
 CREATE TABLE IF NOT EXISTS categories (
   taxonomy TEXT NOT NULL,
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS navitems (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX idx_navitems_parent ON navitems(parent_id);
+CREATE INDEX IF NOT EXISTS idx_navitems_parent ON navitems(parent_id);
 
 -- Task 10：扩展推送参数（POST /api/server-settings，扁平字符串键值原样存储、Worker 不解释）
 -- 带 IF NOT EXISTS：对已建库的部署环境重放本文件不报错（终局评审 minor-2：sites/categories 同步补齐）
